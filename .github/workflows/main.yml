@@ -1,0 +1,78 @@
+name: Build PixelKit Android APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Extract PixelKit ZIP
+        run: |
+          mkdir project
+          unzip -q *.zip -d project
+          echo "Extracted files:"
+          find project -maxdepth 2 -type f | head -50
+
+      - name: Find project root
+        run: |
+          if [ -f project/package.json ]; then
+            echo "PROJECT_DIR=project" >> "$GITHUB_ENV"
+          else
+            DIR=$(find project -name package.json -type f -print -quit | xargs dirname)
+            echo "PROJECT_DIR=$DIR" >> "$GITHUB_ENV"
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ${{ env.PROJECT_DIR }}/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: npm install
+
+      - name: Install Capacitor
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          npm install @capacitor/core @capacitor/cli @capacitor/android
+
+      - name: Build React app
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: npm run build
+
+      - name: Configure Capacitor
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          if [ ! -f capacitor.config.json ]; then
+            npx cap init PixelKit com.pixelkit.app --web-dir=dist
+          fi
+          npx cap add android
+          npx cap copy android
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Build APK
+        working-directory: ${{ env.PROJECT_DIR }}/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PixelKit-debug-apk
+          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
