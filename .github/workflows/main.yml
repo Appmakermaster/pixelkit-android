@@ -14,6 +14,7 @@ jobs:
       - name: Extract PixelKit ZIP
         run: |
           mkdir -p project
+
           ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" -print -quit)
 
           if [ -z "$ZIP_FILE" ]; then
@@ -21,7 +22,36 @@ jobs:
             exit 1
           fi
 
-          unzip -q "$ZIP_FILE" -d project
+          python3 - "$ZIP_FILE" <<'PY'
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          zip_file = sys.argv[1]
+          destination = Path("project")
+
+          with zipfile.ZipFile(zip_file, "r") as z:
+              for info in z.infolist():
+                  name = info.filename.lstrip("/")
+
+                  if not name or name.endswith("/"):
+                      continue
+
+                  path = Path(name)
+
+                  if ".." in path.parts:
+                      print(f"Skipping unsafe path: {name}")
+                      continue
+
+                  target = destination / path
+                  target.parent.mkdir(parents=True, exist_ok=True)
+
+                  with z.open(info) as source:
+                      with open(target, "wb") as output:
+                          output.write(source.read())
+
+          print("ZIP extracted successfully.")
+          PY
 
           echo "Extracted files:"
           find project -maxdepth 2 -type f | head -50
