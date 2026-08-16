@@ -13,8 +13,16 @@ jobs:
 
       - name: Extract PixelKit ZIP
         run: |
-          mkdir project
-          unzip -q *.zip -d project
+          mkdir -p project
+          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" -print -quit)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No ZIP file found in repository root."
+            exit 1
+          fi
+
+          unzip -q "$ZIP_FILE" -d project
+
           echo "Extracted files:"
           find project -maxdepth 2 -type f | head -50
 
@@ -23,7 +31,13 @@ jobs:
           if [ -f project/package.json ]; then
             echo "PROJECT_DIR=project" >> "$GITHUB_ENV"
           else
-            DIR=$(find project -name package.json -type f -print -quit | xargs dirname)
+            DIR=$(find project -name package.json -type f -print -quit | xargs -r dirname)
+
+            if [ -z "$DIR" ]; then
+              echo "ERROR: package.json not found."
+              exit 1
+            fi
+
             echo "PROJECT_DIR=$DIR" >> "$GITHUB_ENV"
           fi
 
@@ -48,10 +62,14 @@ jobs:
       - name: Configure Capacitor
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          if [ ! -f capacitor.config.json ]; then
+          if [ ! -f capacitor.config.json ] && [ ! -f capacitor.config.ts ]; then
             npx cap init PixelKit com.pixelkit.app --web-dir=dist
           fi
-          npx cap add android
+
+          if [ ! -d android ]; then
+            npx cap add android
+          fi
+
           npx cap copy android
 
       - name: Setup Java
