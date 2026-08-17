@@ -3,6 +3,9 @@ name: Build PixelKit Android APK
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -11,19 +14,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Extract PixelKit ZIP
+      - name: Find ZIP file
         shell: bash
         run: |
           set -e
 
-          ZIP_FILE=$(find . -maxdepth 2 -type f -iname "*.zip" -print -quit)
+          ZIP_FILE=$(find . -type f -iname "*.zip" -print -quit)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No ZIP file found in repository."
+            echo "ERROR: No ZIP file found."
             exit 1
           fi
 
-          echo "Using ZIP: $ZIP_FILE"
+          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+          echo "Found ZIP: $ZIP_FILE"
+
+      - name: Extract PixelKit ZIP
+        shell: bash
+        run: |
+          set -e
 
           rm -rf project
           mkdir -p project
@@ -59,16 +68,18 @@ jobs:
                       target.mkdir(parents=True, exist_ok=True)
                   else:
                       target.parent.mkdir(parents=True, exist_ok=True)
-                      with z.open(info) as src, open(target, "wb") as dst:
-                          dst.write(src.read())
+
+                      with z.open(info) as src:
+                          with open(target, "wb") as dst:
+                              dst.write(src.read())
 
           print("ZIP extracted successfully.")
           PY
 
-          echo "Extracted files:"
-          find project -maxdepth 4 -type f | head -100
+          echo "Extracted project:"
+          find project -maxdepth 5 -type f | head -200
 
-      - name: Find project directory
+      - name: Find Android project
         shell: bash
         run: |
           set -e
@@ -77,7 +88,7 @@ jobs:
 
           if [ -z "$PACKAGE_FILE" ]; then
             echo "ERROR: package.json was not found."
-            find project -maxdepth 5 -type f
+            find project -maxdepth 6 -type f
             exit 1
           fi
 
@@ -86,13 +97,16 @@ jobs:
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "Project root: $PROJECT_DIR"
+          echo "Project directory:"
+          echo "$PROJECT_DIR"
+
+          echo "package.json:"
           cat "$PROJECT_DIR/package.json"
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: 24
           package-manager-cache: false
 
       - name: Install dependencies
@@ -115,11 +129,12 @@ jobs:
 
           npm install @capacitor/core @capacitor/cli @capacitor/android
 
-      - name: Build React app
+      - name: Build web application
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -e
+
           npm run build
 
       - name: Configure Capacitor
@@ -136,7 +151,7 @@ jobs:
             npx cap add android
           fi
 
-          npx cap copy android
+          npx cap sync android
 
       - name: Setup Java
         uses: actions/setup-java@v5
@@ -152,7 +167,7 @@ jobs:
         run: |
           yes | sdkmanager --licenses > /dev/null || true
 
-      - name: Build APK
+      - name: Build Debug APK
         working-directory: ${{ env.PROJECT_DIR }}/android
         shell: bash
         run: |
@@ -160,17 +175,30 @@ jobs:
 
           chmod +x gradlew
 
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: Find APK
+      - name: Verify APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          echo "APK files:"
-          find android -type f -name "*.apk" -print
+          set -e
+
+          APK=$(find android/app/build/outputs/apk/debug \
+            -type f \
+            -name "*.apk" \
+            -print -quit)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: APK was not created."
+            exit 1
+          fi
+
+          echo "APK successfully created:"
+          echo "$APK"
+          ls -lh "$APK"
 
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: PixelKit-debug-apk
           path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/*.apk
