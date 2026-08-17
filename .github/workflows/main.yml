@@ -11,74 +11,98 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # Extract ZIP safely, including ZIPs that contain absolute paths
       - name: Extract PixelKit ZIP
+        shell: bash
         run: |
-          mkdir -p project
+          set -e
 
-          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" -print -quit)
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" -print -quit)
 
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: No ZIP file found in repository root."
             exit 1
           fi
 
+          echo "Using ZIP: $ZIP_FILE"
+
+          mkdir -p project
+
           python3 - "$ZIP_FILE" <<'PY'
           import sys
           import zipfile
           from pathlib import Path
 
-          zip_file = sys.argv[1]
-          destination = Path("project")
+          zip_path = sys.argv[1]
+          output = Path("project").resolve()
 
-          with zipfile.ZipFile(zip_file, "r") as z:
+          with zipfile.ZipFile(zip_path, "r") as z:
               for info in z.infolist():
-                  name = info.filename.lstrip("/")
+                  name = info.filename.replace("\\", "/")
 
-                  if not name or name.endswith("/"):
+                  # Remove leading / so absolute paths become relative
+                  name = name.lstrip("/")
+
+                  # Prevent ../ paths from escaping project/
+                  parts = [p for p in name.split("/") if p not in ("", ".")]
+
+                  if any(p == ".." for p in parts):
+                      print(f"Skipping unsafe path: {info.filename}")
                       continue
 
-                  path = Path(name)
+                  target = output.joinpath(*parts)
 
-                  if ".." in path.parts:
-                      print(f"Skipping unsafe path: {name}")
-                      continue
-
-                  target = destination / path
-                  target.parent.mkdir(parents=True, exist_ok=True)
-
-                  with z.open(info) as source:
-                      with open(target, "wb") as output:
-                          output.write(source.read())
+                  if info.is_dir():
+                      target.mkdir(parents=True, exist_ok=True)
+                  else:
+                      target.parent.mkdir(parents=True, exist_ok=True)
+                      with z.open(info) as src, open(target, "wb") as dst:
+                          dst.write(src.read())
 
           print("ZIP extracted successfully.")
           PY
 
           echo "Extracted files:"
-          find project -maxdepth 2 -type f | head -50
+          find project -maxdepth 3 -type f | head -100
 
       - name: Find project root
+        shell: bash
         run: |
-          if [ -f project/package.json ]; then
-            echo "PROJECT_DIR=project" >> "$GITHUB_ENV"
-          else
-            DIR=$(find project -name package.json -type f -print -quit | xargs -r dirname)
+          set -e
 
-            if [ -z "$DIR" ]; then
-              echo "ERROR: package.json not found."
+          if [ -f "project/package.json" ]; then
+            PROJECT_DIR="$GITHUB_WORKSPACE/project"
+          else
+            PACKAGE_FILE=$(find project -name package.json -type f -print -quit)
+
+            if [ -z "$PACKAGE_FILE" ]; then
+              echo "ERROR: package.json was not found."
+              echo "Extracted files:"
+              find project -maxdepth 4 -type f
               exit 1
             fi
 
-            echo "PROJECT_DIR=$DIR" >> "$GITHUB_ENV"
+            PROJECT_DIR="$GITHUB_WORKSPACE/$(dirname "$PACKAGE_FILE")"
           fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Project root: $PROJECT_DIR"
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: ${{ env.PROJECT_DIR }}/package-lock.json
 
       - name: Install dependencies
         working-directory: ${{ env.PROJECT_DIR }}
-        run: npm install
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
 
       - name: Install Capacitor
         working-directory: ${{ env.PROJECT_DIR }}
@@ -91,7 +115,10 @@ jobs:
 
       - name: Configure Capacitor
         working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
         run: |
+          set -e
+
           if [ ! -f capacitor.config.json ] && [ ! -f capacitor.config.ts ]; then
             npx cap init PixelKit com.pixelkit.app --web-dir=dist
           fi
@@ -113,12 +140,20 @@ jobs:
 
       - name: Build APK
         working-directory: ${{ env.PROJECT_DIR }}/android
+        shell: bash
         run: |
           chmod +x gradlew
           ./gradlew assembleDebug
+
+      - name: Find APK
+        working-directory: ${{ env.PROJECT_DIR }}
+        run: |
+          echo "APK files:"
+          find android -type f -name "*.apk" -print
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: PixelKit-debug-apk
           path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
