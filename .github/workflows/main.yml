@@ -15,29 +15,35 @@ jobs:
 
     steps:
 
+      # 1. Checkout
       - name: Checkout repository
         uses: actions/checkout@v5
 
+      # 2. Setup Node.js
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
           node-version: 24
           package-manager-cache: false
 
+      # 3. Setup Java
       - name: Setup Java
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 17
 
+      # 4. Setup Android SDK
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      # 5. Accept Android licenses
       - name: Accept Android SDK licenses
         shell: bash
         run: |
           yes | sdkmanager --licenses > /dev/null || true
 
+      # 6. Find PixelKit ZIP
       - name: Find PixelKit ZIP
         shell: bash
         run: |
@@ -46,13 +52,14 @@ jobs:
           ZIP_FILE=$(find . -maxdepth 3 -type f -iname "*.zip" -print -quit)
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No ZIP file found."
+            echo "ERROR: No ZIP file found in repository."
             exit 1
           fi
 
+          echo "Using ZIP: $ZIP_FILE"
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
-          echo "Found ZIP: $ZIP_FILE"
 
+      # 7. Extract PixelKit ZIP
       - name: Extract PixelKit ZIP
         shell: bash
         run: |
@@ -71,6 +78,7 @@ jobs:
 
           with zipfile.ZipFile(zip_path, "r") as z:
               for info in z.infolist():
+
                   name = info.filename.replace("\\", "/").lstrip("/")
 
                   parts = [
@@ -79,6 +87,9 @@ jobs:
                   ]
 
                   if ".." in parts:
+                      continue
+
+                  if not parts:
                       continue
 
                   target = (output / Path(*parts)).resolve()
@@ -100,7 +111,11 @@ jobs:
           print("ZIP extracted successfully.")
           PY
 
-      - name: Find project
+          echo "Extracted files:"
+          find project -maxdepth 5 -type f | head -200
+
+      # 8. Find React project
+      - name: Find project directory
         shell: bash
         run: |
           set -e
@@ -108,118 +123,181 @@ jobs:
           PACKAGE_FILE=$(find project -type f -name "package.json" -print -quit)
 
           if [ -z "$PACKAGE_FILE" ]; then
-            echo "ERROR: package.json not found."
+            echo "ERROR: package.json was not found."
             find project -maxdepth 6 -type f
             exit 1
           fi
 
-          PROJECT_DIR="$(dirname "$PACKAGE_FILE")"
-          PROJECT_DIR="$(cd "$PROJECT_DIR" && pwd)"
+          PROJECT_DIR=$(dirname "$PACKAGE_FILE")
+          PROJECT_DIR=$(cd "$PROJECT_DIR" && pwd)
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
           echo "Project directory:"
           echo "$PROJECT_DIR"
 
+      # 9. Show package.json
       - name: Show package.json
         working-directory: ${{ env.PROJECT_DIR }}
-        run: cat package.json
+        shell: bash
+        run: |
+          cat package.json
 
+      # 10. Install dependencies
       - name: Install dependencies
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -e
 
+          npm config set fund false
+          npm config set audit false
+
           if [ -f package-lock.json ]; then
-            npm ci
+            npm ci --include=dev
           else
-            npm install
+            npm install --include=dev
           fi
 
+      # 11. Ensure react-scripts exists
+      - name: Install react-scripts
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -e
+
+          if [ ! -x node_modules/.bin/react-scripts ]; then
+            echo "react-scripts is missing."
+            echo "Installing react-scripts..."
+
+            npm install --save-dev react-scripts@5.0.1
+          fi
+
+          echo "Checking react-scripts..."
+          ./node_modules/.bin/react-scripts --version
+
+      # 12. Install Capacitor
       - name: Install Capacitor
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -e
 
-          npm install @capacitor/core @capacitor/cli @capacitor/android
+          npm install \
+            @capacitor/core \
+            @capacitor/cli \
+            @capacitor/android
 
+      # 13. Build React application
       - name: Build web application
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -e
 
+          echo "Building React application..."
+
           npm run build
 
-      - name: Detect web output
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -e
+          echo "Checking React build output..."
 
-          if [ -d "dist" ]; then
-            echo "WEB_DIR=dist" >> "$GITHUB_ENV"
-            echo "Using dist/"
-          elif [ -d "build" ]; then
-            echo "WEB_DIR=build" >> "$GITHUB_ENV"
-            echo "Using build/"
-          else
-            echo "ERROR: No dist/ or build/ directory found."
+          if [ ! -d build ]; then
+            echo "ERROR: React build directory was not created."
             echo "Project contents:"
-            find . -maxdepth 2 -type d
+            find . -maxdepth 3 -type d
             exit 1
           fi
 
+          echo "React build completed successfully."
+          find build -maxdepth 2 -type f | head -100
+
+      # 14. Configure Capacitor
       - name: Configure Capacitor
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -e
 
-          echo "Web directory: $WEB_DIR"
-
+          # Create Capacitor config if it doesn't exist
           if [ ! -f capacitor.config.json ] && [ ! -f capacitor.config.ts ]; then
-            npx cap init PixelKit com.pixelkit.app --web-dir="$WEB_DIR"
+
+            echo "Creating Capacitor configuration..."
+
+            cat > capacitor.config.json <<'EOF'
+          {
+            "appId": "com.pixelkit.app",
+            "appName": "PixelKit",
+            "webDir": "build"
+          }
+          EOF
+
           fi
 
-          if [ ! -d android ] || [ ! -f android/gradlew ]; then
-            echo "Android project missing or incomplete."
-            echo "Creating Android project..."
+          # If JSON config exists, make sure it uses CRA's build folder
+          if [ -f capacitor.config.json ]; then
 
-            rm -rf android
+            python3 <<'PY'
+          import json
+          from pathlib import Path
+
+          path = Path("capacitor.config.json")
+
+          try:
+              data = json.loads(path.read_text())
+          except Exception:
+              data = {}
+
+          data["appId"] = data.get("appId", "com.pixelkit.app")
+          data["appName"] = data.get("appName", "PixelKit")
+          data["webDir"] = "build"
+
+          path.write_text(
+              json.dumps(data, indent=2) + "\n"
+          )
+
+          print("Updated capacitor.config.json")
+          PY
+
+          fi
+
+          echo "Capacitor configuration:"
+          if [ -f capacitor.config.json ]; then
+            cat capacitor.config.json
+          fi
+
+          # Add Android platform
+          if [ ! -d android ]; then
+            echo "Adding Android platform..."
             npx cap add android
+          else
+            echo "Android platform already exists."
           fi
 
+          # Copy web files
+          echo "Copying web files to Android..."
           npx cap copy android
 
-          if [ ! -f android/gradlew ]; then
-            echo "ERROR: Gradle wrapper was not created."
-            find android -maxdepth 3 -type f | head -100
-            exit 1
-          fi
-
+      # 15. Verify Android project
       - name: Verify Android project
-        working-directory: ${{ env.PROJECT_DIR }}/android
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -e
 
-          echo "Java:"
-          java -version
+          if [ ! -f android/gradlew ]; then
+            echo "ERROR: Android Gradle wrapper not found."
+            find android -maxdepth 3 -type f | head -100
+            exit 1
+          fi
 
-          echo "Node:"
-          node --version
+          if [ ! -d android/app ]; then
+            echo "ERROR: Android app directory not found."
+            exit 1
+          fi
 
-          echo "Gradle wrapper:"
-          ls -la gradlew
+          echo "Android project verified."
 
-          chmod +x gradlew
-
-          echo "Gradle version:"
-          ./gradlew --version
-
+      # 16. Build Debug APK
       - name: Build Debug APK
         working-directory: ${{ env.PROJECT_DIR }}/android
         shell: bash
@@ -230,25 +308,23 @@ jobs:
 
           ./gradlew assembleDebug \
             --no-daemon \
-            --stacktrace \
-            --warning-mode all
+            --stacktrace
 
+      # 17. Find APK
       - name: Find APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -e
 
-          echo "APK files:"
-          find android -type f -name "*.apk" -print
+          echo "Generated APK files:"
 
-          APK_COUNT=$(find android -type f -name "*.apk" | wc -l)
+          find android \
+            -type f \
+            -name "*.apk" \
+            -print
 
-          if [ "$APK_COUNT" -eq 0 ]; then
-            echo "ERROR: No APK was generated."
-            exit 1
-          fi
-
+      # 18. Upload APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
