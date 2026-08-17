@@ -11,12 +11,13 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Find PixelKit ZIP
+      # Find and safely extract the ZIP
+      - name: Extract PixelKit ZIP
         shell: bash
         run: |
           set -e
 
-          ZIP_FILE=$(find . -maxdepth 3 -type f -iname "*.zip" -print -quit)
+          ZIP_FILE=$(find . -maxdepth 2 -type f -iname "*.zip" -print -quit)
 
           if [ -z "$ZIP_FILE" ]; then
             echo "ERROR: No ZIP file found in repository."
@@ -24,12 +25,6 @@ jobs:
           fi
 
           echo "Using ZIP: $ZIP_FILE"
-          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
-
-      - name: Extract PixelKit ZIP
-        shell: bash
-        run: |
-          set -e
 
           rm -rf project
           mkdir -p project
@@ -39,18 +34,16 @@ jobs:
           import zipfile
           from pathlib import Path
 
-          zip_path = sys.argv[1]
+          zip_path = Path(sys.argv[1])
           output = Path("project").resolve()
 
           with zipfile.ZipFile(zip_path, "r") as z:
               for info in z.infolist():
-                  name = info.filename.replace("\\", "/").lstrip("/")
+                  name = info.filename.replace("\\", "/")
+                  name = name.lstrip("/")
 
                   parts = [p for p in name.split("/") if p not in ("", ".")]
                   if ".." in parts:
-                      continue
-
-                  if not parts:
                       continue
 
                   target = (output / Path(*parts)).resolve()
@@ -60,7 +53,7 @@ jobs:
                   except ValueError:
                       continue
 
-                  if info.is_dir():
+                  if name.endswith("/"):
                       target.mkdir(parents=True, exist_ok=True)
                   else:
                       target.parent.mkdir(parents=True, exist_ok=True)
@@ -70,7 +63,11 @@ jobs:
           print("ZIP extracted successfully.")
           PY
 
-      - name: Find project root
+          echo "Extracted files:"
+          find project -maxdepth 4 -type f | head -100
+
+      # Locate package.json even if ZIP contains an extra folder
+      - name: Find project directory
         shell: bash
         run: |
           set -e
@@ -79,40 +76,27 @@ jobs:
 
           if [ -z "$PACKAGE_FILE" ]; then
             echo "ERROR: package.json was not found."
-            echo "Extracted files:"
-            find project -maxdepth 4 -type f -print
+            echo "Contents of project:"
+            find project -maxdepth 5 -type f
             exit 1
           fi
 
-          PROJECT_DIR="$GITHUB_WORKSPACE/$(dirname "$PACKAGE_FILE")"
+          PROJECT_DIR=$(dirname "$PACKAGE_FILE")
+          PROJECT_DIR=$(cd "$PROJECT_DIR" && pwd)
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "Project root:"
-          echo "$PROJECT_DIR"
+          echo "Project root: $PROJECT_DIR"
+          echo "package.json:"
+          cat "$PROJECT_DIR/package.json"
 
-      - name: Show project files
-        shell: bash
-        run: |
-          echo "Project directory:"
-          echo "$PROJECT_DIR"
-
-          echo ""
-          echo "Important files:"
-          find "$PROJECT_DIR" -maxdepth 3 -type f \
-            \( -name "package.json" \
-            -o -name "capacitor.config.json" \
-            -o -name "capacitor.config.ts" \
-            -o -name "capacitor.config.js" \
-            -o -name "settings.gradle" \
-            -o -name "gradlew" \) \
-            -print
-
+      # Node.js 22
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
 
+      # Install project dependencies
       - name: Install dependencies
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -125,6 +109,7 @@ jobs:
             npm install
           fi
 
+      # Install Capacitor if required
       - name: Install Capacitor
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -133,26 +118,23 @@ jobs:
 
           npm install @capacitor/core @capacitor/cli @capacitor/android
 
+      # Build React application
       - name: Build React app
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -e
-
           npm run build
 
+      # Configure Capacitor
       - name: Configure Capacitor
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -e
 
-          if [ ! -f capacitor.config.json ] && \
-             [ ! -f capacitor.config.ts ] && \
-             [ ! -f capacitor.config.js ]; then
-
-            npx cap init PixelKit com.pixelkit.app \
-              --web-dir=dist
+          if [ ! -f capacitor.config.json ] && [ ! -f capacitor.config.ts ]; then
+            npx cap init PixelKit com.pixelkit.app --web-dir=dist
           fi
 
           if [ ! -d android ]; then
@@ -161,15 +143,24 @@ jobs:
 
           npx cap copy android
 
+      # Java 17
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: 17
 
+      # Android SDK
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
 
+      # Accept Android SDK licenses
+      - name: Accept Android licenses
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+
+      # Build APK
       - name: Build APK
         working-directory: ${{ env.PROJECT_DIR }}/android
         shell: bash
@@ -178,30 +169,20 @@ jobs:
 
           chmod +x gradlew
 
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug --no-daemon
 
+      # Show generated APK
       - name: Find APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          set -e
-
           echo "APK files:"
           find android -type f -name "*.apk" -print
 
-          APK=$(find android -type f -name "app-debug.apk" -print -quit)
-
-          if [ -z "$APK" ]; then
-            echo "ERROR: app-debug.apk was not found."
-            exit 1
-          fi
-
-          echo "APK found:"
-          echo "$APK"
-
+      # Upload APK
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: PixelKit-debug-apk
-          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.PROJECT_DIR }}/android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
