@@ -11,21 +11,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Extract ZIP safely, including ZIPs that contain absolute paths
+      - name: Find PixelKit ZIP
+        shell: bash
+        run: |
+          set -e
+
+          ZIP_FILE=$(find . -maxdepth 3 -type f -iname "*.zip" -print -quit)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No ZIP file found in repository."
+            exit 1
+          fi
+
+          echo "Using ZIP: $ZIP_FILE"
+          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+
       - name: Extract PixelKit ZIP
         shell: bash
         run: |
           set -e
 
-          ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" -print -quit)
-
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No ZIP file found in repository root."
-            exit 1
-          fi
-
-          echo "Using ZIP: $ZIP_FILE"
-
+          rm -rf project
           mkdir -p project
 
           python3 - "$ZIP_FILE" <<'PY'
@@ -38,19 +44,21 @@ jobs:
 
           with zipfile.ZipFile(zip_path, "r") as z:
               for info in z.infolist():
-                  name = info.filename.replace("\\", "/")
+                  name = info.filename.replace("\\", "/").lstrip("/")
 
-                  # Remove leading / so absolute paths become relative
-                  name = name.lstrip("/")
-
-                  # Prevent ../ paths from escaping project/
                   parts = [p for p in name.split("/") if p not in ("", ".")]
-
-                  if any(p == ".." for p in parts):
-                      print(f"Skipping unsafe path: {info.filename}")
+                  if ".." in parts:
                       continue
 
-                  target = output.joinpath(*parts)
+                  if not parts:
+                      continue
+
+                  target = (output / Path(*parts)).resolve()
+
+                  try:
+                      target.relative_to(output)
+                  except ValueError:
+                      continue
 
                   if info.is_dir():
                       target.mkdir(parents=True, exist_ok=True)
@@ -62,42 +70,55 @@ jobs:
           print("ZIP extracted successfully.")
           PY
 
-          echo "Extracted files:"
-          find project -maxdepth 3 -type f | head -100
-
       - name: Find project root
         shell: bash
         run: |
           set -e
 
-          if [ -f "project/package.json" ]; then
-            PROJECT_DIR="$GITHUB_WORKSPACE/project"
-          else
-            PACKAGE_FILE=$(find project -name package.json -type f -print -quit)
+          PACKAGE_FILE=$(find project -type f -name "package.json" -print -quit)
 
-            if [ -z "$PACKAGE_FILE" ]; then
-              echo "ERROR: package.json was not found."
-              echo "Extracted files:"
-              find project -maxdepth 4 -type f
-              exit 1
-            fi
-
-            PROJECT_DIR="$GITHUB_WORKSPACE/$(dirname "$PACKAGE_FILE")"
+          if [ -z "$PACKAGE_FILE" ]; then
+            echo "ERROR: package.json was not found."
+            echo "Extracted files:"
+            find project -maxdepth 4 -type f -print
+            exit 1
           fi
 
+          PROJECT_DIR="$GITHUB_WORKSPACE/$(dirname "$PACKAGE_FILE")"
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
-          echo "Project root: $PROJECT_DIR"
+
+          echo "Project root:"
+          echo "$PROJECT_DIR"
+
+      - name: Show project files
+        shell: bash
+        run: |
+          echo "Project directory:"
+          echo "$PROJECT_DIR"
+
+          echo ""
+          echo "Important files:"
+          find "$PROJECT_DIR" -maxdepth 3 -type f \
+            \( -name "package.json" \
+            -o -name "capacitor.config.json" \
+            -o -name "capacitor.config.ts" \
+            -o -name "capacitor.config.js" \
+            -o -name "settings.gradle" \
+            -o -name "gradlew" \) \
+            -print
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: ${{ env.PROJECT_DIR }}/package-lock.json
+          node-version: 22
 
       - name: Install dependencies
         working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
         run: |
+          set -e
+
           if [ -f package-lock.json ]; then
             npm ci
           else
@@ -106,12 +127,19 @@ jobs:
 
       - name: Install Capacitor
         working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
         run: |
+          set -e
+
           npm install @capacitor/core @capacitor/cli @capacitor/android
 
       - name: Build React app
         working-directory: ${{ env.PROJECT_DIR }}
-        run: npm run build
+        shell: bash
+        run: |
+          set -e
+
+          npm run build
 
       - name: Configure Capacitor
         working-directory: ${{ env.PROJECT_DIR }}
@@ -119,8 +147,12 @@ jobs:
         run: |
           set -e
 
-          if [ ! -f capacitor.config.json ] && [ ! -f capacitor.config.ts ]; then
-            npx cap init PixelKit com.pixelkit.app --web-dir=dist
+          if [ ! -f capacitor.config.json ] && \
+             [ ! -f capacitor.config.ts ] && \
+             [ ! -f capacitor.config.js ]; then
+
+            npx cap init PixelKit com.pixelkit.app \
+              --web-dir=dist
           fi
 
           if [ ! -d android ]; then
@@ -133,23 +165,39 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: "17"
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
+        uses: android-actions/setup-android@v3
 
       - name: Build APK
         working-directory: ${{ env.PROJECT_DIR }}/android
         shell: bash
         run: |
+          set -e
+
           chmod +x gradlew
+
           ./gradlew assembleDebug
 
       - name: Find APK
         working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
         run: |
+          set -e
+
           echo "APK files:"
           find android -type f -name "*.apk" -print
+
+          APK=$(find android -type f -name "app-debug.apk" -print -quit)
+
+          if [ -z "$APK" ]; then
+            echo "ERROR: app-debug.apk was not found."
+            exit 1
+          fi
+
+          echo "APK found:"
+          echo "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
