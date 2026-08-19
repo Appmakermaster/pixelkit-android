@@ -6,66 +6,59 @@ on:
 permissions:
   contents: read
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   build:
     name: Build Android APK
     runs-on: ubuntu-latest
 
-    defaults:
-      run:
-        shell: bash
-
     steps:
 
-      # =========================================================
-      # 1. CHECKOUT
-      # =========================================================
+      # =========================================
+      # CHECKOUT
+      # =========================================
 
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
 
-      # =========================================================
-      # 2. SETUP NODE.JS
-      # =========================================================
+      # =========================================
+      # NODE.JS
+      # =========================================
 
+      # IMPORTANT:
+      # Do NOT use "cache: npm" here.
+      # Your previous build failed because of the npm cache path.
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: '20'
-          cache: npm
-          cache-dependency-path: project/package-lock.json
+          node-version: 20
 
 
-      # =========================================================
-      # 3. SETUP JAVA 21
-      # =========================================================
+      # =========================================
+      # JAVA 21
+      # =========================================
 
+      # Capacitor Android is compiling with Java 21.
       - name: Set up Java 21
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
-          cache: gradle
 
 
-      # =========================================================
-      # 4. VERIFY JAVA
-      # =========================================================
+      # =========================================
+      # VERIFY JAVA
+      # =========================================
 
       - name: Check Java version
         run: |
-          echo "JAVA_HOME=$JAVA_HOME"
           java -version
           javac -version
 
 
-      # =========================================================
-      # 5. CHECK NODE / NPM
-      # =========================================================
+      # =========================================
+      # VERIFY NODE
+      # =========================================
 
       - name: Check Node and npm
         run: |
@@ -73,39 +66,35 @@ jobs:
           npm --version
 
 
-      # =========================================================
-      # 6. INSTALL WEB APP DEPENDENCIES
-      # =========================================================
+      # =========================================
+      # INSTALL WEB DEPENDENCIES
+      # =========================================
 
+      # Uses npm ci when package-lock.json exists.
+      # Falls back to npm install if there is no lock file.
       - name: Install web dependencies
         working-directory: project
+        shell: bash
         run: |
-          npm ci
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
 
 
-      # =========================================================
-      # 7. BUILD REACT WEB APPLICATION
-      # =========================================================
+      # =========================================
+      # BUILD WEB APPLICATION
+      # =========================================
 
       - name: Build web application
         working-directory: project
-        run: |
-          npm run build
+        run: npm run build
 
 
-      # =========================================================
-      # 8. INSTALL CAPACITOR CLI
-      # =========================================================
-
-      - name: Install Capacitor CLI
-        working-directory: project
-        run: |
-          npm install @capacitor/cli
-
-
-      # =========================================================
-      # 9. VERIFY CAPACITOR
-      # =========================================================
+      # =========================================
+      # CHECK CAPACITOR
+      # =========================================
 
       - name: Check Capacitor
         working-directory: project
@@ -113,9 +102,9 @@ jobs:
           npx cap --version
 
 
-      # =========================================================
-      # 10. SYNC WEB APP WITH ANDROID
-      # =========================================================
+      # =========================================
+      # SYNC CAPACITOR ANDROID
+      # =========================================
 
       - name: Sync Capacitor Android
         working-directory: project
@@ -123,91 +112,58 @@ jobs:
           npx cap sync android
 
 
-      # =========================================================
-      # 11. VERIFY ANDROID PROJECT
-      # =========================================================
+      # =========================================
+      # VERIFY ANDROID PROJECT
+      # =========================================
 
       - name: Verify Android project
-        working-directory: project
-        run: |
-          test -d android
-          test -f android/gradlew
-          chmod +x android/gradlew
-
-          echo "Android project found."
-          echo "Gradle version:"
-          cd android
-          ./gradlew --version
-
-
-      # =========================================================
-      # 12. VERIFY JAVA USED BY GRADLE
-      # =========================================================
-
-      - name: Verify Gradle Java environment
         working-directory: project/android
         run: |
-          echo "JAVA_HOME=$JAVA_HOME"
-          java -version
+          chmod +x ./gradlew
           ./gradlew --version
 
 
-      # =========================================================
-      # 13. BUILD DEBUG APK
-      # =========================================================
+      # =========================================
+      # CLEAN ANDROID BUILD
+      # =========================================
+
+      - name: Clean Android project
+        working-directory: project/android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew clean
+
+
+      # =========================================
+      # BUILD DEBUG APK
+      # =========================================
 
       - name: Build Debug APK
         working-directory: project/android
         run: |
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --stacktrace
 
 
-      # =========================================================
-      # 14. FIND APK
-      # =========================================================
+      # =========================================
+      # FIND APK
+      # =========================================
 
       - name: Find APK
         working-directory: project/android
         run: |
-          echo "Searching for APK files..."
+          echo "APK files:"
           find app/build/outputs/apk -type f -name "*.apk" -print
 
-          test -n "$(find app/build/outputs/apk -type f -name "*.apk" -print -quit)"
 
-          echo "APK successfully created."
-
-
-      # =========================================================
-      # 15. COPY APK TO SIMPLE LOCATION
-      # =========================================================
-
-      - name: Prepare APK
-        working-directory: project
-        run: |
-          mkdir -p release
-
-          APK_PATH=$(find android/app/build/outputs/apk/debug \
-            -type f \
-            -name "*.apk" \
-            -print \
-            -quit)
-
-          test -n "$APK_PATH"
-
-          cp "$APK_PATH" release/PixelKit-debug.apk
-
-          echo "APK prepared:"
-          ls -lh release/PixelKit-debug.apk
-
-
-      # =========================================================
-      # 16. UPLOAD APK
-      # =========================================================
+      # =========================================
+      # UPLOAD APK
+      # =========================================
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: PixelKit-Android-Debug
-          path: project/release/PixelKit-debug.apk
+          name: PixelKit-debug-apk
+          path: project/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 14
