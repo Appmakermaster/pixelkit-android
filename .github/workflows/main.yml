@@ -1,4 +1,4 @@
-name: Build PixelKit Android APK
+name: Build Android APK
 
 on:
   workflow_dispatch:
@@ -6,268 +6,124 @@ on:
 permissions:
   contents: read
 
-env:
-  NODE_VERSION: "20"
-  JAVA_VERSION: "21"
-
 jobs:
   build:
-    name: Build Android APK
+    name: Build PixelKit Android APK
     runs-on: ubuntu-latest
+
+    env:
+      NODE_VERSION: "22"
+      JAVA_VERSION: "21"
+      APP_ID: "com.appmakermaster.pixelkit"
+      APP_NAME: "PixelKit"
 
     steps:
 
-      # ------------------------------------------------------------
-      # 1. CHECKOUT
-      # ------------------------------------------------------------
-
+      # ---------------------------------------------------------
+      # 1. Checkout repository
+      # ---------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ---------------------------------------------------------
+      # 2. Set up Node.js
+      # ---------------------------------------------------------
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
 
-      # ------------------------------------------------------------
-      # 2. SHOW REPOSITORY
-      # ------------------------------------------------------------
+      # ---------------------------------------------------------
+      # 3. Set up Java
+      # ---------------------------------------------------------
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
 
+      # ---------------------------------------------------------
+      # 4. Show repository contents
+      # ---------------------------------------------------------
       - name: Show repository contents
         shell: bash
         run: |
-          set -e
+          set -euxo pipefail
 
           echo "Repository:"
           pwd
-
           echo
-          echo "Root files:"
+
+          echo "Files:"
           find . -maxdepth 2 -type f -print | sort
 
-
-      # ------------------------------------------------------------
-      # 3. FIND ZIP
-      # ------------------------------------------------------------
-
-      - name: Find project ZIP
-        id: zip
+      # ---------------------------------------------------------
+      # 5. Find and extract the uploaded ZIP
+      # ---------------------------------------------------------
+      - name: Extract project
         shell: bash
         run: |
-          set -e
+          set -euxo pipefail
 
           ZIP_FILE="$(find . -maxdepth 1 -type f -iname '*.zip' | head -n 1)"
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No ZIP file found."
-            ls -la
+            echo "ERROR: No ZIP file found in repository root."
             exit 1
           fi
 
-          echo "Using ZIP:"
-          echo "$ZIP_FILE"
-
-          echo "zip_file=$ZIP_FILE" >> "$GITHUB_OUTPUT"
-
-
-      # ------------------------------------------------------------
-      # 4. SAFE ZIP EXTRACTION
-      # ------------------------------------------------------------
-
-      - name: Extract project
-        env:
-          ZIP_FILE: ${{ steps.zip.outputs.zip_file }}
-        shell: bash
-        run: |
-          set -e
+          echo "Using ZIP: $ZIP_FILE"
 
           rm -rf project
           mkdir -p project
 
-          python3 - "$ZIP_FILE" <<'PY'
-          import sys
-          import zipfile
-          from pathlib import Path
-
-          zip_path = Path(sys.argv[1])
-          destination = Path("project").resolve()
-
-          print("Extracting:", zip_path)
-          print("Destination:", destination)
-
-          with zipfile.ZipFile(zip_path, "r") as archive:
-
-              for info in archive.infolist():
-
-                  name = info.filename.replace("\\", "/")
-
-                  # Remove leading slash from ZIP entries.
-                  name = name.lstrip("/")
-
-                  parts = [
-                      part
-                      for part in name.split("/")
-                      if part not in ("", ".")
-                  ]
-
-                  # Prevent path traversal.
-                  if any(part == ".." for part in parts):
-                      raise RuntimeError(
-                          f"Unsafe ZIP path: {info.filename}"
-                      )
-
-                  if not parts:
-                      continue
-
-                  target = destination.joinpath(*parts)
-
-                  try:
-                      target.resolve().relative_to(destination)
-                  except ValueError:
-                      raise RuntimeError(
-                          f"Unsafe extraction target: {info.filename}"
-                      )
-
-                  if info.is_dir():
-                      target.mkdir(
-                          parents=True,
-                          exist_ok=True
-                      )
-                  else:
-                      target.parent.mkdir(
-                          parents=True,
-                          exist_ok=True
-                      )
-
-                      with archive.open(info, "r") as source:
-                          with open(target, "wb") as output:
-                              output.write(source.read())
-
-          print("Extraction completed successfully.")
-          PY
+          unzip -q "$ZIP_FILE" -d project
 
           echo
-          echo "Extracted project:"
-          find project -maxdepth 5 -type f -print | sort
+          echo "Extracted files:"
+          find project -maxdepth 3 -type f -print | sort | head -300
 
-
-      # ------------------------------------------------------------
-      # 5. FIND PACKAGE.JSON
-      # ------------------------------------------------------------
-
+      # ---------------------------------------------------------
+      # 6. Locate package.json
+      # ---------------------------------------------------------
       - name: Locate web project
-        id: project
         shell: bash
         run: |
-          set -e
+          set -euxo pipefail
 
-          PACKAGE_JSON="$(
-            find project \
-              -type f \
-              -name package.json \
-              -not -path '*/node_modules/*' \
-              -not -path '*/android/*' \
-              | head -n 1
-          )"
+          PACKAGE_JSON="$(find "$GITHUB_WORKSPACE/project" \
+            -type f \
+            -name package.json \
+            -not -path '*/node_modules/*' \
+            | head -n 1)"
 
           if [ -z "$PACKAGE_JSON" ]; then
-            echo "ERROR: package.json was not found."
-
-            echo
-            echo "Project files:"
-            find project -maxdepth 8 -type f -print | sort
-
+            echo "ERROR: package.json was not found inside the ZIP."
             exit 1
           fi
 
           PROJECT_DIR="$(dirname "$PACKAGE_JSON")"
 
-          echo "package.json:"
-          echo "$PACKAGE_JSON"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo
           echo "Project directory:"
           echo "$PROJECT_DIR"
 
-          echo "project_dir=$PROJECT_DIR" >> "$GITHUB_OUTPUT"
-
-
-      # ------------------------------------------------------------
-      # 6. VERIFY WEB PROJECT
-      # ------------------------------------------------------------
-
-      - name: Verify web project
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT_DIR"
-
-          echo "Working directory:"
-          pwd
-
           echo
           echo "package.json:"
-          cat package.json
+          cat "$PACKAGE_JSON"
 
-
-      # ------------------------------------------------------------
-      # 7. NODE 20
-      # ------------------------------------------------------------
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-
-      # ------------------------------------------------------------
-      # 8. CHECK NODE
-      # ------------------------------------------------------------
-
-      - name: Check Node and npm
-        shell: bash
-        run: |
-          set -e
-
-          node --version
-          npm --version
-
-
-      # ------------------------------------------------------------
-      # 9. JAVA 21
-      # ------------------------------------------------------------
-
-      - name: Set up Java 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "21"
-
-
-      # ------------------------------------------------------------
-      # 10. CHECK JAVA
-      # ------------------------------------------------------------
-
-      - name: Check Java version
-        shell: bash
-        run: |
-          set -e
-
-          java -version
-          javac -version
-
-
-      # ------------------------------------------------------------
-      # 11. INSTALL WEB DEPENDENCIES
-      # ------------------------------------------------------------
-
+      # ---------------------------------------------------------
+      # 7. Install existing web dependencies
+      # ---------------------------------------------------------
       - name: Install web dependencies
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          set -e
-
-          cd "$PROJECT_DIR"
+          set -euxo pipefail
 
           if [ -f package-lock.json ]; then
             npm ci
@@ -275,420 +131,252 @@ jobs:
             npm install
           fi
 
-
-      # ------------------------------------------------------------
-      # 12. CHECK CAPACITOR
-      # ------------------------------------------------------------
-
-      - name: Check Capacitor
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
-        shell: bash
-        run: |
-          set -e
-
-          cd "$PROJECT_DIR"
-
-          node <<'NODE'
-          const fs = require("fs");
-
-          const pkg = JSON.parse(
-            fs.readFileSync("package.json", "utf8")
-          );
-
-          const deps = {
-            ...(pkg.dependencies || {}),
-            ...(pkg.devDependencies || {})
-          };
-
-          console.log(
-            "@capacitor/core:",
-            deps["@capacitor/core"] || "missing"
-          );
-
-          console.log(
-            "@capacitor/cli:",
-            deps["@capacitor/cli"] || "missing"
-          );
-
-          console.log(
-            "@capacitor/android:",
-            deps["@capacitor/android"] || "missing"
-          );
-          NODE
-
-
-      # ------------------------------------------------------------
-      # 13. INSTALL CAPACITOR IF NEEDED
-      # ------------------------------------------------------------
-
+      # ---------------------------------------------------------
+      # 8. Install Capacitor
+      # ---------------------------------------------------------
       - name: Install Capacitor
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          set -e
+          set -euxo pipefail
 
-          cd "$PROJECT_DIR"
+          npm install \
+            @capacitor/core \
+            @capacitor/cli \
+            @capacitor/android
 
-          node <<'NODE'
-          const fs = require("fs");
+      # ---------------------------------------------------------
+      # 9. Check Capacitor installation
+      # ---------------------------------------------------------
+      - name: Check Capacitor
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -euxo pipefail
 
-          const pkg = JSON.parse(
-            fs.readFileSync("package.json", "utf8")
-          );
+          echo "Node:"
+          node --version
 
-          const deps = {
-            ...(pkg.dependencies || {}),
-            ...(pkg.devDependencies || {})
-          };
+          echo
+          echo "npm:"
+          npm --version
 
-          const required = [
-            "@capacitor/core",
-            "@capacitor/cli",
-            "@capacitor/android"
-          ];
-
-          const missing = required.filter(
-            name => !deps[name]
-          );
-
-          if (missing.length > 0) {
-            console.log("Missing:");
-            console.log(missing.join("\n"));
-            process.exit(1);
-          }
-
-          console.log("Capacitor packages are installed.");
-          NODE
-
-          if [ $? -ne 0 ]; then
-            npm install \
-              @capacitor/core@^7 \
-              @capacitor/cli@^7 \
-              @capacitor/android@^7
-          fi
-
+          echo
+          echo "Capacitor:"
           npx cap --version
 
+          echo
+          echo "Installed Capacitor packages:"
+          npm list \
+            @capacitor/core \
+            @capacitor/cli \
+            @capacitor/android \
+            --depth=0
 
-      # ------------------------------------------------------------
-      # 14. BUILD WEB APP
-      # ------------------------------------------------------------
-
+      # ---------------------------------------------------------
+      # 10. Build web application
+      # ---------------------------------------------------------
       - name: Build web application
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
-          CI: "false"
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          set -e
-
-          cd "$PROJECT_DIR"
+          set -euxo pipefail
 
           npm run build
 
-          if [ -d build ]; then
-            echo "Using build/"
-          elif [ -d dist ]; then
-            echo "Using dist/"
-          else
-            echo "ERROR: npm build did not create build/ or dist/."
-            exit 1
-          fi
-
-
-      # ------------------------------------------------------------
-      # 15. DETERMINE WEB DIRECTORY
-      # ------------------------------------------------------------
-
+      # ---------------------------------------------------------
+      # 11. Determine web directory
+      # ---------------------------------------------------------
       - name: Determine web directory
-        id: web
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          set -e
+          set -euxo pipefail
 
-          cd "$PROJECT_DIR"
-
-          if [ -d build ]; then
-            WEB_DIR="build"
-          elif [ -d dist ]; then
+          if [ -d "dist" ]; then
             WEB_DIR="dist"
+
+          elif [ -d "build" ]; then
+            WEB_DIR="build"
+
+          elif [ -d "www" ]; then
+            WEB_DIR="www"
+
           else
-            echo "ERROR: No web directory."
+            echo "ERROR: Could not find web build directory."
+            echo
+            echo "Directories:"
+            find . -maxdepth 2 -type d \
+              -not -path './node_modules*' \
+              -not -path './android*' \
+              | sort
+
             exit 1
           fi
+
+          echo "WEB_DIR=$WEB_DIR" >> "$GITHUB_ENV"
 
           echo "Web directory: $WEB_DIR"
 
-          echo "web_dir=$WEB_DIR" >> "$GITHUB_OUTPUT"
+          echo
+          echo "Web files:"
+          find "$WEB_DIR" -maxdepth 2 -type f -print | sort | head -200
 
-
-      # ------------------------------------------------------------
-      # 16. FORCE CORRECT CAPACITOR CONFIGURATION
-      #
-      # THIS FIXES YOUR CURRENT ERROR:
-      #
-      # Missing appId for new platform.
-      # ------------------------------------------------------------
-
+      # ---------------------------------------------------------
+      # 12. Create Capacitor configuration
+      # ---------------------------------------------------------
       - name: Configure Capacitor
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
-          WEB_DIR: ${{ steps.web.outputs.web_dir }}
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          set -e
+          set -euxo pipefail
 
-          cd "$PROJECT_DIR"
-
-          echo "Configuring Capacitor..."
-
-          # Remove old configuration files that may contain
-          # an incomplete configuration without appId.
-          rm -f capacitor.config.ts
-          rm -f capacitor.config.js
-          rm -f capacitor.config.mjs
-
-          # Create a clean, valid Capacitor configuration.
           cat > capacitor.config.json <<EOF
           {
-            "appId": "com.pixelkit.app",
-            "appName": "PixelKit",
-            "webDir": "$WEB_DIR"
+            "appId": "${APP_ID}",
+            "appName": "${APP_NAME}",
+            "webDir": "${WEB_DIR}",
+            "bundledWebRuntime": false
           }
           EOF
 
-          echo
-          echo "=========================================="
-          echo "Capacitor configuration"
-          echo "=========================================="
-
+          echo "capacitor.config.json:"
           cat capacitor.config.json
 
-          echo
-          echo "Checking required values..."
-
-          node <<'NODE'
-          const fs = require("fs");
-
-          const config = JSON.parse(
-            fs.readFileSync("capacitor.config.json", "utf8")
-          );
-
-          if (!config.appId) {
-            console.error("ERROR: appId is missing.");
-            process.exit(1);
-          }
-
-          if (!config.appName) {
-            console.error("ERROR: appName is missing.");
-            process.exit(1);
-          }
-
-          if (!config.webDir) {
-            console.error("ERROR: webDir is missing.");
-            process.exit(1);
-          }
-
-          console.log("appId:", config.appId);
-          console.log("appName:", config.appName);
-          console.log("webDir:", config.webDir);
-          console.log("Capacitor configuration is valid.");
-          NODE
-
-
-      # ------------------------------------------------------------
-      # 17. CREATE ANDROID PROJECT
-      # ------------------------------------------------------------
-
+      # ---------------------------------------------------------
+      # 13. Add Android platform
+      # ---------------------------------------------------------
       - name: Create Android project
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          set -e
+          set -euxo pipefail
 
-          cd "$PROJECT_DIR"
-
-          if [ -d android ]; then
+          if [ -d "android" ]; then
             echo "Android project already exists."
           else
-            echo "Creating Android project..."
-
             npx cap add android
           fi
 
-
-      # ------------------------------------------------------------
-      # 18. SYNC ANDROID
-      # ------------------------------------------------------------
-
+      # ---------------------------------------------------------
+      # 14. Sync web application into Android
+      # ---------------------------------------------------------
       - name: Sync Capacitor Android
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          set -e
-
-          cd "$PROJECT_DIR"
+          set -euxo pipefail
 
           npx cap sync android
 
-
-      # ------------------------------------------------------------
-      # 19. VERIFY ANDROID
-      # ------------------------------------------------------------
-
+      # ---------------------------------------------------------
+      # 15. Verify Android project
+      # ---------------------------------------------------------
       - name: Verify Android project
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          set -e
+          set -euxo pipefail
 
-          cd "$PROJECT_DIR"
-
-          if [ ! -d android ]; then
-            echo "ERROR: android directory missing."
+          if [ ! -d "android" ]; then
+            echo "ERROR: Android directory was not created."
             exit 1
           fi
 
-          if [ ! -f android/gradlew ]; then
-            echo "ERROR: android/gradlew missing."
+          if [ ! -f "android/gradlew" ]; then
+            echo "ERROR: android/gradlew was not found."
             exit 1
           fi
 
-          chmod +x android/gradlew
+          echo "Android project:"
+          find android -maxdepth 2 -type f -print | sort | head -200
 
-          echo "Android project is ready."
-
-
-      # ------------------------------------------------------------
-      # 20. CHECK GRADLE
-      # ------------------------------------------------------------
-
+      # ---------------------------------------------------------
+      # 16. Check Java and Gradle
+      # ---------------------------------------------------------
       - name: Check Gradle environment
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        working-directory: ${{ env.PROJECT_DIR }}/android
         shell: bash
         run: |
-          set -e
+          set -euxo pipefail
 
-          cd "$PROJECT_DIR/android"
+          java -version
 
           chmod +x gradlew
 
-          echo "Java:"
-          java -version
-
-          echo
-          echo "Gradle:"
           ./gradlew --version
 
-
-      # ------------------------------------------------------------
-      # 21. CLEAN
-      # ------------------------------------------------------------
-
+      # ---------------------------------------------------------
+      # 17. Clean Android project
+      # ---------------------------------------------------------
       - name: Clean Android project
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        working-directory: ${{ env.PROJECT_DIR }}/android
         shell: bash
         run: |
-          set -e
-
-          cd "$PROJECT_DIR/android"
+          set -euxo pipefail
 
           chmod +x gradlew
 
           ./gradlew clean
 
-
-      # ------------------------------------------------------------
-      # 22. BUILD APK
-      # ------------------------------------------------------------
-
+      # ---------------------------------------------------------
+      # 18. Build Debug APK
+      # ---------------------------------------------------------
       - name: Build Debug APK
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        working-directory: ${{ env.PROJECT_DIR }}/android
         shell: bash
         run: |
-          set -e
-
-          cd "$PROJECT_DIR/android"
+          set -euxo pipefail
 
           chmod +x gradlew
 
           ./gradlew assembleDebug --stacktrace
 
-
-      # ------------------------------------------------------------
-      # 23. FIND APK
-      # ------------------------------------------------------------
-
+      # ---------------------------------------------------------
+      # 19. Find APK
+      # ---------------------------------------------------------
       - name: Find APK
-        id: apk
-        env:
-          PROJECT_DIR: ${{ steps.project.outputs.project_dir }}
+        working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          set -e
+          set -euxo pipefail
 
-          cd "$PROJECT_DIR"
+          echo "Searching for APK..."
 
-          APK="$(
-            find android \
-              -type f \
-              -name '*.apk' \
-              -path '*/build/outputs/*' \
-              | head -n 1
-          )"
+          find android -type f -name '*.apk' -print
+
+          APK="$(find android -type f -name '*.apk' \
+            -path '*/build/outputs/apk/*' \
+            | head -n 1)"
 
           if [ -z "$APK" ]; then
-            echo "ERROR: APK was not found."
-
-            echo
-            echo "Build outputs:"
-            find android \
-              -type f \
-              -path '*/build/outputs/*' \
-              -print | sort
-
+            echo "ERROR: APK was not generated."
             exit 1
           fi
 
-          echo "APK:"
+          echo "APK=$APK" >> "$GITHUB_ENV"
+
+          echo
+          echo "Found APK:"
           echo "$APK"
 
-          echo "apk_path=$PROJECT_DIR/$APK" >> "$GITHUB_OUTPUT"
-
-
-      # ------------------------------------------------------------
-      # 24. UPLOAD APK
-      # ------------------------------------------------------------
-
+      # ---------------------------------------------------------
+      # 20. Upload APK
+      # ---------------------------------------------------------
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: PixelKit-debug-apk
-          path: ${{ steps.apk.outputs.apk_path }}
+          path: ${{ env.PROJECT_DIR }}/${{ env.APK }}
           if-no-files-found: error
 
-
-      # ------------------------------------------------------------
-      # 25. SUCCESS
-      # ------------------------------------------------------------
-
+      # ---------------------------------------------------------
+      # 21. Build complete
+      # ---------------------------------------------------------
       - name: Build complete
         shell: bash
         run: |
-          echo
-          echo "=========================================="
-          echo "PIXELKIT ANDROID APK BUILD SUCCESSFUL"
-          echo "=========================================="
-          echo
-          echo "Artifact:"
-          echo "PixelKit-debug-apk"
+          echo "========================================="
+          echo "        BUILD COMPLETED SUCCESSFULLY"
+          echo "========================================="
+          echo "APK artifact: PixelKit-debug-apk"
