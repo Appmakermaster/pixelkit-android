@@ -8,13 +8,13 @@ permissions:
 
 jobs:
   build:
-    name: Build Android APK
+    name: Build PixelKit Android APK
     runs-on: ubuntu-latest
 
     steps:
 
       # =========================================
-      # CHECKOUT
+      # 1. CHECKOUT REPOSITORY
       # =========================================
 
       - name: Checkout repository
@@ -22,32 +22,104 @@ jobs:
 
 
       # =========================================
-      # SHOW PROJECT STRUCTURE
+      # 2. SHOW REPOSITORY
       # =========================================
 
-      - name: Show repository files
+      - name: Show repository contents
         run: |
-          echo "Current directory:"
+          echo "Repository:"
           pwd
 
           echo ""
-          echo "Repository contents:"
-          ls -la
+          echo "Files:"
+          ls -lah
 
           echo ""
-          echo "Important files:"
-          find . -maxdepth 3 -type f \
-            \( -name "package.json" \
-            -o -name "package-lock.json" \
-            -o -name "capacitor.config.*" \
-            -o -name "settings.gradle" \
-            -o -name "build.gradle" \
-            -o -name "gradlew" \) \
-            -print
+          echo "ZIP files:"
+          find . -maxdepth 1 -type f -name "*.zip" -print
 
 
       # =========================================
-      # NODE.JS
+      # 3. EXTRACT PROJECT ZIP
+      # =========================================
+
+      - name: Extract project
+        shell: bash
+        run: |
+          set -e
+
+          ZIP_FILE=$(find . -maxdepth 1 -type f -name "*.zip" | head -n 1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "ERROR: No ZIP project file was found."
+            exit 1
+          fi
+
+          echo "Using ZIP:"
+          echo "$ZIP_FILE"
+
+          rm -rf extracted-project
+
+          mkdir -p extracted-project
+
+          unzip -q "$ZIP_FILE" -d extracted-project
+
+          echo ""
+          echo "Extracted project:"
+          find extracted-project -maxdepth 3 -type f | head -n 200
+
+
+      # =========================================
+      # 4. FIND WEB PROJECT
+      # =========================================
+
+      - name: Find web project
+        shell: bash
+        run: |
+          set -e
+
+          PACKAGE_JSON=$(find extracted-project \
+            -type f \
+            -name "package.json" \
+            -not -path "*/node_modules/*" \
+            | head -n 1)
+
+          if [ -z "$PACKAGE_JSON" ]; then
+            echo "ERROR: package.json was not found inside the ZIP."
+            echo ""
+            echo "Extracted files:"
+            find extracted-project -maxdepth 5 -type f | head -n 300
+            exit 1
+          fi
+
+          PROJECT_DIR=$(dirname "$PACKAGE_JSON")
+
+          echo "package.json:"
+          echo "$PACKAGE_JSON"
+
+          echo ""
+          echo "Project directory:"
+          echo "$PROJECT_DIR"
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+
+      # =========================================
+      # 5. SHOW PROJECT
+      # =========================================
+
+      - name: Show web project
+        run: |
+          echo "Project directory:"
+          echo "$PROJECT_DIR"
+
+          echo ""
+          echo "Project files:"
+          ls -lah "$PROJECT_DIR"
+
+
+      # =========================================
+      # 6. SET UP NODE.JS
       # =========================================
 
       - name: Set up Node.js
@@ -57,18 +129,18 @@ jobs:
 
 
       # =========================================
-      # JAVA 21
+      # 7. SET UP JAVA 21
       # =========================================
 
       - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: "21"
 
 
       # =========================================
-      # CHECK JAVA
+      # 8. CHECK JAVA
       # =========================================
 
       - name: Check Java version
@@ -82,7 +154,7 @@ jobs:
 
 
       # =========================================
-      # CHECK NODE
+      # 9. CHECK NODE
       # =========================================
 
       - name: Check Node and npm
@@ -96,167 +168,219 @@ jobs:
 
 
       # =========================================
-      # VERIFY PACKAGE.JSON
+      # 10. VERIFY PACKAGE
       # =========================================
 
-      - name: Verify web project
+      - name: Verify package.json
         run: |
-          if [ ! -f "package.json" ]; then
-            echo "ERROR: package.json was not found in the repository root."
-            echo ""
-            echo "Files in repository:"
-            ls -la
+          set -e
+
+          if [ ! -f "$PROJECT_DIR/package.json" ]; then
+            echo "ERROR: package.json not found."
             exit 1
           fi
 
           echo "package.json found."
+
           echo ""
-          cat package.json
+          echo "Package:"
+          cat "$PROJECT_DIR/package.json"
 
 
       # =========================================
-      # INSTALL DEPENDENCIES
+      # 11. INSTALL WEB DEPENDENCIES
       # =========================================
 
       - name: Install web dependencies
+        shell: bash
         run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
           if [ -f "package-lock.json" ]; then
             echo "package-lock.json found."
             npm ci
           else
-            echo "No package-lock.json found."
+            echo "package-lock.json not found."
+            echo "Running npm install."
             npm install
           fi
 
 
       # =========================================
-      # BUILD WEB APPLICATION
+      # 12. BUILD WEB APPLICATION
       # =========================================
 
       - name: Build web application
+        shell: bash
         run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
           npm run build
 
 
       # =========================================
-      # CHECK CAPACITOR
+      # 13. CHECK CAPACITOR
       # =========================================
 
       - name: Check Capacitor
+        shell: bash
         run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
           npx cap --version
 
 
       # =========================================
-      # CHECK CAPACITOR CONFIG
+      # 14. CHECK CAPACITOR CONFIG
       # =========================================
 
       - name: Check Capacitor configuration
+        shell: bash
         run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
           echo "Looking for Capacitor configuration..."
 
           if [ -f "capacitor.config.ts" ]; then
             echo "Found capacitor.config.ts"
-          elif [ -f "capacitor.config.json" ]; then
-            echo "Found capacitor.config.json"
+
           elif [ -f "capacitor.config.js" ]; then
             echo "Found capacitor.config.js"
+
+          elif [ -f "capacitor.config.json" ]; then
+            echo "Found capacitor.config.json"
+
           else
-            echo "ERROR: No Capacitor configuration found."
+            echo "ERROR: Capacitor configuration was not found."
             exit 1
           fi
 
 
       # =========================================
-      # SYNC CAPACITOR
+      # 15. CHECK ANDROID
+      # =========================================
+
+      - name: Check Android project
+        shell: bash
+        run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
+          if [ -d "android" ]; then
+            echo "Android directory already exists."
+          else
+            echo "Android directory does not exist."
+            echo "Attempting to create Android project."
+
+            npx cap add android
+          fi
+
+          echo ""
+          echo "Android directory:"
+          ls -lah android
+
+
+      # =========================================
+      # 16. SYNC CAPACITOR
       # =========================================
 
       - name: Sync Capacitor Android
+        shell: bash
         run: |
+          set -e
+
+          cd "$PROJECT_DIR"
+
           npx cap sync android
 
 
       # =========================================
-      # CHECK ANDROID DIRECTORY
+      # 17. CHECK GRADLE
       # =========================================
 
-      - name: Check Android project
+      - name: Check Gradle
+        shell: bash
         run: |
-          if [ ! -d "android" ]; then
-            echo "ERROR: android directory was not found."
-            echo ""
-            echo "Repository contents:"
-            ls -la
-            exit 1
-          fi
+          set -e
 
-          echo "Android directory found."
-          echo ""
-          ls -la android
+          cd "$PROJECT_DIR/android"
 
-
-      # =========================================
-      # CHECK GRADLE WRAPPER
-      # =========================================
-
-      - name: Check Gradle wrapper
-        working-directory: android
-        run: |
           if [ ! -f "./gradlew" ]; then
-            echo "ERROR: android/gradlew was not found."
+            echo "ERROR: gradlew was not found."
             exit 1
           fi
 
           chmod +x ./gradlew
 
-          echo "Gradle version:"
           ./gradlew --version
 
 
       # =========================================
-      # CLEAN ANDROID
+      # 18. CLEAN ANDROID
       # =========================================
 
       - name: Clean Android project
-        working-directory: android
+        shell: bash
         run: |
+          set -e
+
+          cd "$PROJECT_DIR/android"
+
           chmod +x ./gradlew
+
           ./gradlew clean
 
 
       # =========================================
-      # BUILD DEBUG APK
+      # 19. BUILD DEBUG APK
       # =========================================
 
       - name: Build Debug APK
-        working-directory: android
+        shell: bash
         run: |
+          set -e
+
+          cd "$PROJECT_DIR/android"
+
           chmod +x ./gradlew
+
           ./gradlew assembleDebug --stacktrace
 
 
       # =========================================
-      # FIND APK
+      # 20. FIND APK
       # =========================================
 
       - name: Find APK
+        shell: bash
         run: |
+          set -e
+
           echo "Searching for APK..."
 
-          find android/app/build/outputs/apk \
+          find "$PROJECT_DIR/android/app/build/outputs" \
             -type f \
             -name "*.apk" \
             -print
 
 
       # =========================================
-      # UPLOAD APK
+      # 21. UPLOAD APK
       # =========================================
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: PixelKit-debug-apk
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          path: "**/android/app/build/outputs/apk/debug/app-debug.apk"
           if-no-files-found: error
           retention-days: 14
