@@ -1,4 +1,4 @@
-name: Build PixelKit Android APK
+name: Build Android APK
 
 on:
   workflow_dispatch:
@@ -22,12 +22,34 @@ jobs:
 
 
       # =========================================
+      # SHOW PROJECT STRUCTURE
+      # =========================================
+
+      - name: Show repository files
+        run: |
+          echo "Current directory:"
+          pwd
+
+          echo ""
+          echo "Repository contents:"
+          ls -la
+
+          echo ""
+          echo "Important files:"
+          find . -maxdepth 3 -type f \
+            \( -name "package.json" \
+            -o -name "package-lock.json" \
+            -o -name "capacitor.config.*" \
+            -o -name "settings.gradle" \
+            -o -name "build.gradle" \
+            -o -name "gradlew" \) \
+            -print
+
+
+      # =========================================
       # NODE.JS
       # =========================================
 
-      # IMPORTANT:
-      # Do NOT use "cache: npm" here.
-      # Your previous build failed because of the npm cache path.
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
@@ -38,7 +60,6 @@ jobs:
       # JAVA 21
       # =========================================
 
-      # Capacitor Android is compiling with Java 21.
       - name: Set up Java 21
         uses: actions/setup-java@v4
         with:
@@ -47,38 +68,63 @@ jobs:
 
 
       # =========================================
-      # VERIFY JAVA
+      # CHECK JAVA
       # =========================================
 
       - name: Check Java version
         run: |
+          echo "Java:"
           java -version
+
+          echo ""
+          echo "Javac:"
           javac -version
 
 
       # =========================================
-      # VERIFY NODE
+      # CHECK NODE
       # =========================================
 
       - name: Check Node and npm
         run: |
+          echo "Node:"
           node --version
+
+          echo ""
+          echo "npm:"
           npm --version
 
 
       # =========================================
-      # INSTALL WEB DEPENDENCIES
+      # VERIFY PACKAGE.JSON
       # =========================================
 
-      # Uses npm ci when package-lock.json exists.
-      # Falls back to npm install if there is no lock file.
-      - name: Install web dependencies
-        working-directory: project
-        shell: bash
+      - name: Verify web project
         run: |
-          if [ -f package-lock.json ]; then
+          if [ ! -f "package.json" ]; then
+            echo "ERROR: package.json was not found in the repository root."
+            echo ""
+            echo "Files in repository:"
+            ls -la
+            exit 1
+          fi
+
+          echo "package.json found."
+          echo ""
+          cat package.json
+
+
+      # =========================================
+      # INSTALL DEPENDENCIES
+      # =========================================
+
+      - name: Install web dependencies
+        run: |
+          if [ -f "package-lock.json" ]; then
+            echo "package-lock.json found."
             npm ci
           else
+            echo "No package-lock.json found."
             npm install
           fi
 
@@ -88,8 +134,8 @@ jobs:
       # =========================================
 
       - name: Build web application
-        working-directory: project
-        run: npm run build
+        run: |
+          npm run build
 
 
       # =========================================
@@ -97,38 +143,82 @@ jobs:
       # =========================================
 
       - name: Check Capacitor
-        working-directory: project
         run: |
           npx cap --version
 
 
       # =========================================
-      # SYNC CAPACITOR ANDROID
+      # CHECK CAPACITOR CONFIG
+      # =========================================
+
+      - name: Check Capacitor configuration
+        run: |
+          echo "Looking for Capacitor configuration..."
+
+          if [ -f "capacitor.config.ts" ]; then
+            echo "Found capacitor.config.ts"
+          elif [ -f "capacitor.config.json" ]; then
+            echo "Found capacitor.config.json"
+          elif [ -f "capacitor.config.js" ]; then
+            echo "Found capacitor.config.js"
+          else
+            echo "ERROR: No Capacitor configuration found."
+            exit 1
+          fi
+
+
+      # =========================================
+      # SYNC CAPACITOR
       # =========================================
 
       - name: Sync Capacitor Android
-        working-directory: project
         run: |
           npx cap sync android
 
 
       # =========================================
-      # VERIFY ANDROID PROJECT
+      # CHECK ANDROID DIRECTORY
       # =========================================
 
-      - name: Verify Android project
-        working-directory: project/android
+      - name: Check Android project
         run: |
+          if [ ! -d "android" ]; then
+            echo "ERROR: android directory was not found."
+            echo ""
+            echo "Repository contents:"
+            ls -la
+            exit 1
+          fi
+
+          echo "Android directory found."
+          echo ""
+          ls -la android
+
+
+      # =========================================
+      # CHECK GRADLE WRAPPER
+      # =========================================
+
+      - name: Check Gradle wrapper
+        working-directory: android
+        run: |
+          if [ ! -f "./gradlew" ]; then
+            echo "ERROR: android/gradlew was not found."
+            exit 1
+          fi
+
           chmod +x ./gradlew
+
+          echo "Gradle version:"
           ./gradlew --version
 
 
       # =========================================
-      # CLEAN ANDROID BUILD
+      # CLEAN ANDROID
       # =========================================
 
       - name: Clean Android project
-        working-directory: project/android
+        working-directory: android
         run: |
           chmod +x ./gradlew
           ./gradlew clean
@@ -139,7 +229,7 @@ jobs:
       # =========================================
 
       - name: Build Debug APK
-        working-directory: project/android
+        working-directory: android
         run: |
           chmod +x ./gradlew
           ./gradlew assembleDebug --stacktrace
@@ -150,10 +240,13 @@ jobs:
       # =========================================
 
       - name: Find APK
-        working-directory: project/android
         run: |
-          echo "APK files:"
-          find app/build/outputs/apk -type f -name "*.apk" -print
+          echo "Searching for APK..."
+
+          find android/app/build/outputs/apk \
+            -type f \
+            -name "*.apk" \
+            -print
 
 
       # =========================================
@@ -164,6 +257,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: PixelKit-debug-apk
-          path: project/android/app/build/outputs/apk/debug/app-debug.apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
