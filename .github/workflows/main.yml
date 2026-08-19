@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build PixelKit Android APK
 
 on:
   workflow_dispatch:
@@ -16,54 +16,52 @@ jobs:
       JAVA_VERSION: "21"
       APP_ID: "com.appmakermaster.pixelkit"
       APP_NAME: "PixelKit"
+      NODE_OPTIONS: "--openssl-legacy-provider"
 
     steps:
 
-      # ---------------------------------------------------------
-      # 1. Checkout repository
-      # ---------------------------------------------------------
+      # =========================================================
+      # 1. Checkout
+      # =========================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ---------------------------------------------------------
-      # 2. Set up Node.js
-      # ---------------------------------------------------------
+      # =========================================================
+      # 2. Node.js
+      # =========================================================
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: |
-            package-lock.json
 
-      # ---------------------------------------------------------
-      # 3. Set up Java
-      # ---------------------------------------------------------
+      # =========================================================
+      # 3. Java
+      # =========================================================
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
 
-      # ---------------------------------------------------------
-      # 4. Show repository contents
-      # ---------------------------------------------------------
+      # =========================================================
+      # 4. Show repository
+      # =========================================================
       - name: Show repository contents
         shell: bash
         run: |
           set -euxo pipefail
 
-          echo "Repository:"
+          echo "Current directory:"
           pwd
-          echo
 
-          echo "Files:"
+          echo
+          echo "Repository files:"
           find . -maxdepth 2 -type f -print | sort
 
-      # ---------------------------------------------------------
-      # 5. Find and extract the uploaded ZIP
-      # ---------------------------------------------------------
-      - name: Extract project
+      # =========================================================
+      # 5. Find ZIP
+      # =========================================================
+      - name: Find project ZIP
         shell: bash
         run: |
           set -euxo pipefail
@@ -71,11 +69,22 @@ jobs:
           ZIP_FILE="$(find . -maxdepth 1 -type f -iname '*.zip' | head -n 1)"
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No ZIP file found in repository root."
+            echo "ERROR: No ZIP file found."
             exit 1
           fi
 
-          echo "Using ZIP: $ZIP_FILE"
+          echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+
+          echo "Using:"
+          echo "$ZIP_FILE"
+
+      # =========================================================
+      # 6. Extract ZIP
+      # =========================================================
+      - name: Extract project
+        shell: bash
+        run: |
+          set -euxo pipefail
 
           rm -rf project
           mkdir -p project
@@ -83,12 +92,12 @@ jobs:
           unzip -q "$ZIP_FILE" -d project
 
           echo
-          echo "Extracted files:"
-          find project -maxdepth 3 -type f -print | sort | head -300
+          echo "Extracted project:"
+          find project -maxdepth 3 -type f -print | sort
 
-      # ---------------------------------------------------------
-      # 6. Locate package.json
-      # ---------------------------------------------------------
+      # =========================================================
+      # 7. Find package.json
+      # =========================================================
       - name: Locate web project
         shell: bash
         run: |
@@ -101,7 +110,7 @@ jobs:
             | head -n 1)"
 
           if [ -z "$PACKAGE_JSON" ]; then
-            echo "ERROR: package.json was not found inside the ZIP."
+            echo "ERROR: package.json not found."
             exit 1
           fi
 
@@ -109,31 +118,28 @@ jobs:
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
+          echo
           echo "Project directory:"
           echo "$PROJECT_DIR"
 
           echo
-          echo "package.json:"
+          echo "Original package.json:"
           cat "$PACKAGE_JSON"
 
-      # ---------------------------------------------------------
-      # 7. Install existing web dependencies
-      # ---------------------------------------------------------
+      # =========================================================
+      # 8. Install web dependencies
+      # =========================================================
       - name: Install web dependencies
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euxo pipefail
 
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
-          fi
+          npm install
 
-      # ---------------------------------------------------------
-      # 8. Install Capacitor
-      # ---------------------------------------------------------
+      # =========================================================
+      # 9. Install Capacitor
+      # =========================================================
       - name: Install Capacitor
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -145,10 +151,10 @@ jobs:
             @capacitor/cli \
             @capacitor/android
 
-      # ---------------------------------------------------------
-      # 9. Check Capacitor installation
-      # ---------------------------------------------------------
-      - name: Check Capacitor
+      # =========================================================
+      # 10. Verify Node / npm / Capacitor
+      # =========================================================
+      - name: Check Node npm and Capacitor
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
@@ -166,65 +172,54 @@ jobs:
           npx cap --version
 
           echo
-          echo "Installed Capacitor packages:"
+          echo "Capacitor packages:"
           npm list \
             @capacitor/core \
             @capacitor/cli \
             @capacitor/android \
             --depth=0
 
-      # ---------------------------------------------------------
-      # 10. Build web application
-      # ---------------------------------------------------------
+      # =========================================================
+      # 11. Build React application
+      # =========================================================
       - name: Build web application
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
+        env:
+          CI: "false"
         run: |
           set -euxo pipefail
 
           npm run build
 
-      # ---------------------------------------------------------
-      # 11. Determine web directory
-      # ---------------------------------------------------------
+      # =========================================================
+      # 12. Determine web directory
+      # =========================================================
       - name: Determine web directory
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euxo pipefail
 
-          if [ -d "dist" ]; then
-            WEB_DIR="dist"
-
-          elif [ -d "build" ]; then
+          if [ -d "build" ]; then
             WEB_DIR="build"
-
+          elif [ -d "dist" ]; then
+            WEB_DIR="dist"
           elif [ -d "www" ]; then
             WEB_DIR="www"
-
           else
-            echo "ERROR: Could not find web build directory."
-            echo
-            echo "Directories:"
-            find . -maxdepth 2 -type d \
-              -not -path './node_modules*' \
-              -not -path './android*' \
-              | sort
-
+            echo "ERROR: No build directory found."
             exit 1
           fi
 
           echo "WEB_DIR=$WEB_DIR" >> "$GITHUB_ENV"
 
-          echo "Web directory: $WEB_DIR"
+          echo "Using web directory:"
+          echo "$WEB_DIR"
 
-          echo
-          echo "Web files:"
-          find "$WEB_DIR" -maxdepth 2 -type f -print | sort | head -200
-
-      # ---------------------------------------------------------
-      # 12. Create Capacitor configuration
-      # ---------------------------------------------------------
+      # =========================================================
+      # 13. Create Capacitor configuration
+      # =========================================================
       - name: Configure Capacitor
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -235,17 +230,17 @@ jobs:
           {
             "appId": "${APP_ID}",
             "appName": "${APP_NAME}",
-            "webDir": "${WEB_DIR}",
-            "bundledWebRuntime": false
+            "webDir": "${WEB_DIR}"
           }
           EOF
 
-          echo "capacitor.config.json:"
+          echo
+          echo "Capacitor configuration:"
           cat capacitor.config.json
 
-      # ---------------------------------------------------------
-      # 13. Add Android platform
-      # ---------------------------------------------------------
+      # =========================================================
+      # 14. Create Android project
+      # =========================================================
       - name: Create Android project
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -258,9 +253,9 @@ jobs:
             npx cap add android
           fi
 
-      # ---------------------------------------------------------
-      # 14. Sync web application into Android
-      # ---------------------------------------------------------
+      # =========================================================
+      # 15. Sync Capacitor
+      # =========================================================
       - name: Sync Capacitor Android
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -269,9 +264,9 @@ jobs:
 
           npx cap sync android
 
-      # ---------------------------------------------------------
-      # 15. Verify Android project
-      # ---------------------------------------------------------
+      # =========================================================
+      # 16. Verify Android project
+      # =========================================================
       - name: Verify Android project
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -279,36 +274,35 @@ jobs:
           set -euxo pipefail
 
           if [ ! -d "android" ]; then
-            echo "ERROR: Android directory was not created."
+            echo "ERROR: android directory does not exist."
             exit 1
           fi
 
           if [ ! -f "android/gradlew" ]; then
-            echo "ERROR: android/gradlew was not found."
+            echo "ERROR: android/gradlew does not exist."
             exit 1
           fi
 
-          echo "Android project:"
-          find android -maxdepth 2 -type f -print | sort | head -200
+          echo "Android project created successfully."
 
-      # ---------------------------------------------------------
-      # 16. Check Java and Gradle
-      # ---------------------------------------------------------
+      # =========================================================
+      # 17. Gradle environment
+      # =========================================================
       - name: Check Gradle environment
         working-directory: ${{ env.PROJECT_DIR }}/android
         shell: bash
         run: |
           set -euxo pipefail
 
-          java -version
-
           chmod +x gradlew
+
+          java -version
 
           ./gradlew --version
 
-      # ---------------------------------------------------------
-      # 17. Clean Android project
-      # ---------------------------------------------------------
+      # =========================================================
+      # 18. Clean Android project
+      # =========================================================
       - name: Clean Android project
         working-directory: ${{ env.PROJECT_DIR }}/android
         shell: bash
@@ -319,9 +313,9 @@ jobs:
 
           ./gradlew clean
 
-      # ---------------------------------------------------------
-      # 18. Build Debug APK
-      # ---------------------------------------------------------
+      # =========================================================
+      # 19. Build Debug APK
+      # =========================================================
       - name: Build Debug APK
         working-directory: ${{ env.PROJECT_DIR }}/android
         shell: bash
@@ -332,9 +326,9 @@ jobs:
 
           ./gradlew assembleDebug --stacktrace
 
-      # ---------------------------------------------------------
-      # 19. Find APK
-      # ---------------------------------------------------------
+      # =========================================================
+      # 20. Find APK
+      # =========================================================
       - name: Find APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -343,10 +337,15 @@ jobs:
 
           echo "Searching for APK..."
 
-          find android -type f -name '*.apk' -print
+          find android \
+            -type f \
+            -name "*.apk" \
+            -print
 
-          APK="$(find android -type f -name '*.apk' \
-            -path '*/build/outputs/apk/*' \
+          APK="$(find android \
+            -type f \
+            -name "*.apk" \
+            -path "*/build/outputs/apk/*" \
             | head -n 1)"
 
           if [ -z "$APK" ]; then
@@ -357,12 +356,12 @@ jobs:
           echo "APK=$APK" >> "$GITHUB_ENV"
 
           echo
-          echo "Found APK:"
+          echo "APK found:"
           echo "$APK"
 
-      # ---------------------------------------------------------
-      # 20. Upload APK
-      # ---------------------------------------------------------
+      # =========================================================
+      # 21. Upload APK
+      # =========================================================
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
@@ -370,13 +369,16 @@ jobs:
           path: ${{ env.PROJECT_DIR }}/${{ env.APK }}
           if-no-files-found: error
 
-      # ---------------------------------------------------------
-      # 21. Build complete
-      # ---------------------------------------------------------
+      # =========================================================
+      # 22. Complete
+      # =========================================================
       - name: Build complete
         shell: bash
         run: |
-          echo "========================================="
-          echo "        BUILD COMPLETED SUCCESSFULLY"
-          echo "========================================="
-          echo "APK artifact: PixelKit-debug-apk"
+          echo
+          echo "=========================================="
+          echo "   PIXELKIT APK BUILD SUCCESSFUL"
+          echo "=========================================="
+          echo
+          echo "Artifact:"
+          echo "PixelKit-debug-apk"
