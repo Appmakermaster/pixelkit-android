@@ -21,13 +21,13 @@ jobs:
     steps:
 
       # =========================================================
-      # 1. Checkout
+      # 1. Checkout repository
       # =========================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
       # =========================================================
-      # 2. Node.js
+      # 2. Set up Node.js
       # =========================================================
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -35,7 +35,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       # =========================================================
-      # 3. Java
+      # 3. Set up Java
       # =========================================================
       - name: Set up Java
         uses: actions/setup-java@v4
@@ -44,7 +44,7 @@ jobs:
           java-version: ${{ env.JAVA_VERSION }}
 
       # =========================================================
-      # 4. Show repository
+      # 4. Show repository contents
       # =========================================================
       - name: Show repository contents
         shell: bash
@@ -56,10 +56,10 @@ jobs:
 
           echo
           echo "Repository files:"
-          find . -maxdepth 2 -type f -print | sort
+          find . -maxdepth 3 -type f -print | sort
 
       # =========================================================
-      # 5. Find ZIP
+      # 5. Find project ZIP
       # =========================================================
       - name: Find project ZIP
         shell: bash
@@ -75,11 +75,12 @@ jobs:
 
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
 
-          echo "Using:"
+          echo
+          echo "Using project ZIP:"
           echo "$ZIP_FILE"
 
       # =========================================================
-      # 6. Extract ZIP
+      # 6. Extract project
       # =========================================================
       - name: Extract project
         shell: bash
@@ -92,22 +93,24 @@ jobs:
           unzip -q "$ZIP_FILE" -d project
 
           echo
-          echo "Extracted project:"
-          find project -maxdepth 3 -type f -print | sort
+          echo "Extracted project files:"
+          find project -maxdepth 4 -type f -print | sort
 
       # =========================================================
-      # 7. Find package.json
+      # 7. Locate package.json
       # =========================================================
       - name: Locate web project
         shell: bash
         run: |
           set -euxo pipefail
 
-          PACKAGE_JSON="$(find "$GITHUB_WORKSPACE/project" \
-            -type f \
-            -name package.json \
-            -not -path '*/node_modules/*' \
-            | head -n 1)"
+          PACKAGE_JSON="$(
+            find "$GITHUB_WORKSPACE/project" \
+              -type f \
+              -name package.json \
+              -not -path '*/node_modules/*' \
+              | head -n 1
+          )"
 
           if [ -z "$PACKAGE_JSON" ]; then
             echo "ERROR: package.json not found."
@@ -123,11 +126,43 @@ jobs:
           echo "$PROJECT_DIR"
 
           echo
-          echo "Original package.json:"
+          echo "package.json:"
           cat "$PACKAGE_JSON"
 
       # =========================================================
-      # 8. Install web dependencies
+      # 8. Check PixelKit icon
+      # =========================================================
+      - name: Check PixelKit icon
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "Searching for PixelKit icon..."
+
+          if [ -f "assets/icon.png" ]; then
+            echo
+            echo "FOUND: assets/icon.png"
+            file assets/icon.png
+            ls -lh assets/icon.png
+
+          else
+            echo
+            echo "ERROR: assets/icon.png was not found."
+            echo
+            echo "Available image files:"
+            find . \
+              -type f \
+              \( -iname '*.png' -o -iname '*.jpg' -o -iname '*.jpeg' \) \
+              -not -path '*/node_modules/*' \
+              -print \
+              | sort
+
+            exit 1
+          fi
+
+      # =========================================================
+      # 9. Install web dependencies
       # =========================================================
       - name: Install web dependencies
         working-directory: ${{ env.PROJECT_DIR }}
@@ -138,7 +173,7 @@ jobs:
           npm install
 
       # =========================================================
-      # 9. Install Capacitor
+      # 10. Install Capacitor
       # =========================================================
       - name: Install Capacitor
         working-directory: ${{ env.PROJECT_DIR }}
@@ -152,7 +187,18 @@ jobs:
             @capacitor/android
 
       # =========================================================
-      # 10. Verify Node / npm / Capacitor
+      # 11. Install Capacitor Assets
+      # =========================================================
+      - name: Install Capacitor Assets
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          npm install --save-dev @capacitor/assets
+
+      # =========================================================
+      # 12. Check Node / npm / Capacitor
       # =========================================================
       - name: Check Node npm and Capacitor
         working-directory: ${{ env.PROJECT_DIR }}
@@ -177,10 +223,11 @@ jobs:
             @capacitor/core \
             @capacitor/cli \
             @capacitor/android \
+            @capacitor/assets \
             --depth=0
 
       # =========================================================
-      # 11. Build React application
+      # 13. Build web application
       # =========================================================
       - name: Build web application
         working-directory: ${{ env.PROJECT_DIR }}
@@ -193,7 +240,7 @@ jobs:
           npm run build
 
       # =========================================================
-      # 12. Determine web directory
+      # 14. Determine web directory
       # =========================================================
       - name: Determine web directory
         working-directory: ${{ env.PROJECT_DIR }}
@@ -203,10 +250,13 @@ jobs:
 
           if [ -d "build" ]; then
             WEB_DIR="build"
+
           elif [ -d "dist" ]; then
             WEB_DIR="dist"
+
           elif [ -d "www" ]; then
             WEB_DIR="www"
+
           else
             echo "ERROR: No build directory found."
             exit 1
@@ -214,11 +264,12 @@ jobs:
 
           echo "WEB_DIR=$WEB_DIR" >> "$GITHUB_ENV"
 
+          echo
           echo "Using web directory:"
           echo "$WEB_DIR"
 
       # =========================================================
-      # 13. Create Capacitor configuration
+      # 15. Create Capacitor configuration
       # =========================================================
       - name: Configure Capacitor
         working-directory: ${{ env.PROJECT_DIR }}
@@ -239,7 +290,7 @@ jobs:
           cat capacitor.config.json
 
       # =========================================================
-      # 14. Create Android project
+      # 16. Create Android project
       # =========================================================
       - name: Create Android project
         working-directory: ${{ env.PROJECT_DIR }}
@@ -254,7 +305,29 @@ jobs:
           fi
 
       # =========================================================
-      # 15. Sync Capacitor
+      # 17. Generate PixelKit Android icon
+      # =========================================================
+      - name: Generate PixelKit Android icon
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          if [ ! -f "assets/icon.png" ]; then
+            echo "ERROR: assets/icon.png not found."
+            exit 1
+          fi
+
+          echo "Generating Android launcher icons from:"
+          echo "assets/icon.png"
+
+          npx @capacitor/assets generate \
+            --android \
+            --iconBackgroundColor "#ffffff" \
+            --iconBackgroundColorDark "#ffffff"
+
+      # =========================================================
+      # 18. Sync Capacitor Android
       # =========================================================
       - name: Sync Capacitor Android
         working-directory: ${{ env.PROJECT_DIR }}
@@ -265,7 +338,7 @@ jobs:
           npx cap sync android
 
       # =========================================================
-      # 16. Verify Android project
+      # 19. Verify Android project
       # =========================================================
       - name: Verify Android project
         working-directory: ${{ env.PROJECT_DIR }}
@@ -283,10 +356,20 @@ jobs:
             exit 1
           fi
 
+          echo
           echo "Android project created successfully."
 
+          echo
+          echo "Checking generated launcher icons:"
+
+          find android/app/src/main/res \
+            -type f \
+            \( -iname '*launcher*' -o -iname '*icon*' \) \
+            -print \
+            | sort
+
       # =========================================================
-      # 17. Gradle environment
+      # 20. Gradle environment
       # =========================================================
       - name: Check Gradle environment
         working-directory: ${{ env.PROJECT_DIR }}/android
@@ -296,12 +379,15 @@ jobs:
 
           chmod +x gradlew
 
+          echo "Java:"
           java -version
 
+          echo
+          echo "Gradle:"
           ./gradlew --version
 
       # =========================================================
-      # 18. Clean Android project
+      # 21. Clean Android project
       # =========================================================
       - name: Clean Android project
         working-directory: ${{ env.PROJECT_DIR }}/android
@@ -314,7 +400,7 @@ jobs:
           ./gradlew clean
 
       # =========================================================
-      # 19. Build Debug APK
+      # 22. Build Debug APK
       # =========================================================
       - name: Build Debug APK
         working-directory: ${{ env.PROJECT_DIR }}/android
@@ -327,7 +413,7 @@ jobs:
           ./gradlew assembleDebug --stacktrace
 
       # =========================================================
-      # 20. Find APK
+      # 23. Find APK
       # =========================================================
       - name: Find APK
         working-directory: ${{ env.PROJECT_DIR }}
@@ -342,11 +428,13 @@ jobs:
             -name "*.apk" \
             -print
 
-          APK="$(find android \
-            -type f \
-            -name "*.apk" \
-            -path "*/build/outputs/apk/*" \
-            | head -n 1)"
+          APK="$(
+            find android \
+              -type f \
+              -name "*.apk" \
+              -path "*/build/outputs/apk/*" \
+              | head -n 1
+          )"
 
           if [ -z "$APK" ]; then
             echo "ERROR: APK was not generated."
@@ -360,7 +448,7 @@ jobs:
           echo "$APK"
 
       # =========================================================
-      # 21. Upload APK
+      # 24. Upload APK
       # =========================================================
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
@@ -370,7 +458,7 @@ jobs:
           if-no-files-found: error
 
       # =========================================================
-      # 22. Complete
+      # 25. Complete
       # =========================================================
       - name: Build complete
         shell: bash
@@ -380,5 +468,14 @@ jobs:
           echo "   PIXELKIT APK BUILD SUCCESSFUL"
           echo "=========================================="
           echo
+          echo "App ID:"
+          echo "${APP_ID}"
+          echo
+          echo "App Name:"
+          echo "${APP_NAME}"
+          echo
           echo "Artifact:"
           echo "PixelKit-debug-apk"
+          echo
+          echo "PixelKit icon:"
+          echo "Generated from assets/icon.png"
