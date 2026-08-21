@@ -16,50 +16,26 @@ jobs:
       JAVA_VERSION: "21"
       APP_ID: "com.appmakermaster.pixelkit"
       APP_NAME: "PixelKit"
-      NODE_OPTIONS: "--openssl-legacy-provider"
 
     steps:
 
-      # =========================================================
-      # 1. Checkout
-      # =========================================================
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # =========================================================
-      # 2. Node.js
-      # =========================================================
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      # =========================================================
-      # 3. Java
-      # =========================================================
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: ${{ env.JAVA_VERSION }}
 
-      # =========================================================
-      # 4. Show repository
-      # =========================================================
-      - name: Show repository contents
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "Repository:"
-          pwd
-
-          echo
-          find . -maxdepth 2 -type f -print | sort
-
-      # =========================================================
-      # 5. Find ZIP
-      # =========================================================
+      # ---------------------------------------------------------
+      # Find and extract your CodeSandbox ZIP
+      # ---------------------------------------------------------
       - name: Find project ZIP
         shell: bash
         run: |
@@ -68,34 +44,29 @@ jobs:
           ZIP_FILE="$(find . -maxdepth 1 -type f -iname '*.zip' | head -n 1)"
 
           if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: No project ZIP file found."
+            echo "ERROR: No ZIP file found in repository."
             exit 1
           fi
 
           echo "ZIP_FILE=$ZIP_FILE" >> "$GITHUB_ENV"
+          echo "Found ZIP: $ZIP_FILE"
 
-          echo "Using:"
-          echo "$ZIP_FILE"
-
-      # =========================================================
-      # 6. Extract ZIP
-      # =========================================================
       - name: Extract project
         shell: bash
         run: |
           set -euo pipefail
 
           rm -rf project
-          mkdir -p project
+          mkdir project
 
           unzip -q "$ZIP_FILE" -d project
 
           echo "Project extracted."
 
-      # =========================================================
-      # 7. Locate package.json
-      # =========================================================
-      - name: Locate web project
+      # ---------------------------------------------------------
+      # Find package.json
+      # ---------------------------------------------------------
+      - name: Find React project
         shell: bash
         run: |
           set -euo pipefail
@@ -117,27 +88,22 @@ jobs:
 
           echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
 
-          echo "Project:"
+          echo "React project:"
           echo "$PROJECT_DIR"
 
-          echo
-          echo "package.json:"
-          cat "$PACKAGE_JSON"
-
-      # =========================================================
-      # 8. Install web dependencies
-      # =========================================================
-      - name: Install web dependencies
+      # ---------------------------------------------------------
+      # Install dependencies
+      # ---------------------------------------------------------
+      - name: Install dependencies
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
-
           npm install
 
-      # =========================================================
-      # 9. Install Capacitor
-      # =========================================================
+      # ---------------------------------------------------------
+      # Install Capacitor
+      # ---------------------------------------------------------
       - name: Install Capacitor
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
@@ -149,72 +115,42 @@ jobs:
             @capacitor/cli \
             @capacitor/android
 
-      # =========================================================
-      # 10. Check tools
-      # =========================================================
-      - name: Check tools
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          echo "Node:"
-          node --version
-
-          echo
-          echo "npm:"
-          npm --version
-
-          echo
-          echo "Java:"
-          java -version
-
-          echo
-          echo "Capacitor:"
-          npx cap --version
-
-      # =========================================================
-      # 11. Build React application
-      # =========================================================
-      - name: Build web application
+      # ---------------------------------------------------------
+      # Build React
+      # ---------------------------------------------------------
+      - name: Build React application
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         env:
           CI: "false"
         run: |
           set -euo pipefail
-
           npm run build
 
-      # =========================================================
-      # 12. Determine web directory
-      # =========================================================
-      - name: Determine web directory
+      # ---------------------------------------------------------
+      # Find build directory
+      # ---------------------------------------------------------
+      - name: Find web build directory
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
 
           if [ -d "build" ]; then
-            WEB_DIR="build"
+            echo "WEB_DIR=build" >> "$GITHUB_ENV"
           elif [ -d "dist" ]; then
-            WEB_DIR="dist"
+            echo "WEB_DIR=dist" >> "$GITHUB_ENV"
           elif [ -d "www" ]; then
-            WEB_DIR="www"
+            echo "WEB_DIR=www" >> "$GITHUB_ENV"
           else
-            echo "ERROR: build/dist/www directory not found."
+            echo "ERROR: No build directory found."
             exit 1
           fi
 
-          echo "WEB_DIR=$WEB_DIR" >> "$GITHUB_ENV"
-
-          echo "Web directory:"
-          echo "$WEB_DIR"
-
-      # =========================================================
-      # 13. Create Capacitor configuration
-      # =========================================================
-      - name: Configure Capacitor
+      # ---------------------------------------------------------
+      # Capacitor configuration
+      # ---------------------------------------------------------
+      - name: Create Capacitor configuration
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
@@ -228,53 +164,30 @@ jobs:
           }
           EOF
 
-          cat capacitor.config.json
-
-      # =========================================================
-      # 14. Create Android project
-      # =========================================================
-      - name: Create Android project
+      # ---------------------------------------------------------
+      # Create Android project
+      # ---------------------------------------------------------
+      - name: Add Android platform
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
+          npx cap add android
 
-          if [ -d "android" ]; then
-            echo "Android project already exists."
-          else
-            npx cap add android
-          fi
-
-      # =========================================================
-      # 15. Sync Android
-      # =========================================================
-      - name: Sync Capacitor Android
+      - name: Sync Android
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
-
           npx cap sync android
 
-      # =========================================================
-      # 16. Verify Android project
-      # =========================================================
-      - name: Verify Android project
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test -d android
-          test -f android/gradlew
-          test -f android/app/build.gradle
-
-          echo "Android project verified."
-
-      # =========================================================
-      # 17. Prepare signing keystore
-      # =========================================================
-      - name: Prepare signing keystore
+      # ---------------------------------------------------------
+      # CREATE KEYSTORE
+      #
+      # The keystore is deliberately placed INSIDE android/app.
+      # This avoids the path problem from your previous build.
+      # ---------------------------------------------------------
+      - name: Create release keystore
         working-directory: ${{ env.PROJECT_DIR }}
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -283,20 +196,23 @@ jobs:
           set -euo pipefail
 
           if [ -z "$KEYSTORE_BASE64" ]; then
-            echo "ERROR: KEYSTORE_BASE64 secret is missing."
+            echo "ERROR: KEYSTORE_BASE64 secret is empty."
             exit 1
           fi
 
-          echo "$KEYSTORE_BASE64" | base64 --decode > pixelkit-release.jks
+          echo "$KEYSTORE_BASE64" | base64 --decode > android/app/pixelkit-release.jks
 
-          test -s pixelkit-release.jks
+          if [ ! -s android/app/pixelkit-release.jks ]; then
+            echo "ERROR: Keystore was not created."
+            exit 1
+          fi
 
-          echo "Keystore created successfully."
+          echo "Keystore created."
 
-      # =========================================================
-      # 18. Configure Android signing
-      # =========================================================
-      - name: Configure Android signing
+      # ---------------------------------------------------------
+      # CREATE SIGNING PROPERTIES
+      # ---------------------------------------------------------
+      - name: Create signing properties
         working-directory: ${{ env.PROJECT_DIR }}
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
@@ -307,61 +223,46 @@ jobs:
           set -euo pipefail
 
           if [ -z "$KEYSTORE_PASSWORD" ]; then
-            echo "ERROR: KEYSTORE_PASSWORD secret is missing."
+            echo "ERROR: KEYSTORE_PASSWORD secret is empty."
             exit 1
           fi
 
           if [ -z "$KEY_ALIAS" ]; then
-            echo "ERROR: KEY_ALIAS secret is missing."
+            echo "ERROR: KEY_ALIAS secret is empty."
             exit 1
           fi
 
           if [ -z "$KEY_PASSWORD" ]; then
-            echo "ERROR: KEY_PASSWORD secret is missing."
+            echo "ERROR: KEY_PASSWORD secret is empty."
             exit 1
           fi
 
-          KEYSTORE_PATH="$GITHUB_WORKSPACE/$(
-            python3 -c 'import os; print(os.environ["PROJECT_DIR"].replace(os.environ["GITHUB_WORKSPACE"] + "/", ""))'
-          )/pixelkit-release.jks"
-
-          echo "KEYSTORE_PATH=$KEYSTORE_PATH" >> "$GITHUB_ENV"
-
           cat > android/keystore.properties <<EOF
-          storeFile=$KEYSTORE_PATH
+          storeFile=pixelkit-release.jks
           storePassword=$KEYSTORE_PASSWORD
           keyAlias=$KEY_ALIAS
           keyPassword=$KEY_PASSWORD
           EOF
 
-          test -s android/keystore.properties
+          echo "Signing properties created."
 
-          echo "Android signing properties created."
-
-      # =========================================================
-      # 19. Add signing configuration to Gradle
-      # =========================================================
-      - name: Configure Gradle signing
+      # ---------------------------------------------------------
+      # CONFIGURE GRADLE
+      # ---------------------------------------------------------
+      - name: Configure Android signing
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
 
-          GRADLE_FILE="android/app/build.gradle"
-
-          if [ ! -f "$GRADLE_FILE" ]; then
-            echo "ERROR: Gradle file not found:"
-            echo "$GRADLE_FILE"
-            exit 1
-          fi
-
-          python3 - <<'PY'
+          python3 <<'PY'
           from pathlib import Path
 
-          path = Path("android/app/build.gradle")
-          text = path.read_text()
+          gradle = Path("android/app/build.gradle")
 
-          loader = '''
+          text = gradle.read_text()
+
+          signing_loader = r'''
           def keystorePropertiesFile = rootProject.file("keystore.properties")
           def keystoreProperties = new Properties()
 
@@ -371,10 +272,9 @@ jobs:
           '''
 
           if "keystorePropertiesFile" not in text:
-              text = loader + "\n" + text
+              text = signing_loader + "\n" + text
 
-          if "signingConfigs {" not in text:
-              signing = '''
+          signing_block = r'''
               signingConfigs {
                   release {
                       storeFile file(keystoreProperties["storeFile"])
@@ -383,77 +283,62 @@ jobs:
                       keyPassword keystoreProperties["keyPassword"]
                   }
               }
-              '''
+          '''
 
+          if "signingConfigs {" not in text:
               text = text.replace(
                   "android {",
-                  "android {\n" + signing,
+                  "android {\n" + signing_block,
                   1
               )
 
-          if "signingConfig signingConfigs.release" not in text:
-              release_signing = '''
+          release_block = r'''
                   release {
                       signingConfig signingConfigs.release
                   }
-              '''
+          '''
 
+          if "signingConfig signingConfigs.release" not in text:
               if "buildTypes {" in text:
                   text = text.replace(
                       "buildTypes {",
-                      "buildTypes {\n" + release_signing,
+                      "buildTypes {\n" + release_block,
                       1
                   )
               else:
-                  text += "\nandroid {\n    buildTypes {\n" + release_signing + "    }\n}\n"
+                  raise SystemExit(
+                      "ERROR: buildTypes block not found in android/app/build.gradle"
+                  )
 
-          path.write_text(text)
+          gradle.write_text(text)
 
-          print("Gradle signing configuration written.")
+          print("Android signing configuration added.")
           PY
 
-      # =========================================================
-      # 20. Verify signing files
-      # =========================================================
-      - name: Verify signing setup
+      # ---------------------------------------------------------
+      # VERIFY SIGNING FILES
+      # ---------------------------------------------------------
+      - name: Verify signing configuration
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
 
           echo "Checking keystore..."
-
-          test -f pixelkit-release.jks
-          test -s pixelkit-release.jks
+          test -f android/app/pixelkit-release.jks
 
           echo "Checking signing properties..."
-
           test -f android/keystore.properties
-          test -s android/keystore.properties
 
           echo "Checking Gradle..."
-
           test -f android/app/build.gradle
 
-          echo "Signing setup is ready."
+          echo "Signing configuration is ready."
 
-      # =========================================================
-      # 21. Gradle environment
-      # =========================================================
-      - name: Check Gradle
-        working-directory: ${{ env.PROJECT_DIR }}/android
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          chmod +x gradlew
-
-          ./gradlew --version
-
-      # =========================================================
-      # 22. Clean
-      # =========================================================
-      - name: Clean Android project
+      # ---------------------------------------------------------
+      # Build RELEASE APK
+      # ---------------------------------------------------------
+      - name: Build release APK
         working-directory: ${{ env.PROJECT_DIR }}/android
         shell: bash
         run: |
@@ -463,80 +348,50 @@ jobs:
 
           ./gradlew clean
 
-      # =========================================================
-      # 23. Build signed RELEASE APK
-      # =========================================================
-      - name: Build Signed Release APK
-        working-directory: ${{ env.PROJECT_DIR }}/android
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          chmod +x gradlew
-
           ./gradlew assembleRelease --stacktrace
 
-      # =========================================================
-      # 24. Find APK
-      # =========================================================
-      - name: Find Release APK
+      # ---------------------------------------------------------
+      # Find APK
+      # ---------------------------------------------------------
+      - name: Find APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
           set -euo pipefail
 
           APK="$(
-            find android \
+            find android/app/build/outputs/apk/release \
               -type f \
               -name "*.apk" \
-              -path "*/build/outputs/apk/release/*" \
               | head -n 1
           )"
 
           if [ -z "$APK" ]; then
-            echo "ERROR: Release APK not found."
+            echo "ERROR: APK was not generated."
             exit 1
           fi
 
           echo "APK=$APK" >> "$GITHUB_ENV"
 
-          echo "Release APK:"
-          echo "$APK"
-
-      # =========================================================
-      # 25. Verify APK
-      # =========================================================
-      - name: Verify APK
-        working-directory: ${{ env.PROJECT_DIR }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          test -f "$APK"
-
-          echo "APK successfully created:"
+          echo "APK generated:"
           ls -lh "$APK"
 
-      # =========================================================
-      # 26. Upload APK
-      # =========================================================
-      - name: Upload Signed Release APK
+      # ---------------------------------------------------------
+      # Upload APK
+      # ---------------------------------------------------------
+      - name: Upload PixelKit APK
         uses: actions/upload-artifact@v4
         with:
           name: PixelKit-signed-release-apk
           path: ${{ env.PROJECT_DIR }}/${{ env.APK }}
           if-no-files-found: error
 
-      # =========================================================
-      # 27. Complete
-      # =========================================================
-      - name: Build complete
+      # ---------------------------------------------------------
+      # DONE
+      # ---------------------------------------------------------
+      - name: Success
         shell: bash
         run: |
-          echo
-          echo "=========================================="
-          echo " PIXELKIT SIGNED RELEASE APK SUCCESSFUL"
-          echo "=========================================="
-          echo
-          echo "Artifact:"
-          echo "PixelKit-signed-release-apk"
+          echo "========================================"
+          echo " PIXELKIT RELEASE APK SUCCESSFUL"
+          echo "========================================"
