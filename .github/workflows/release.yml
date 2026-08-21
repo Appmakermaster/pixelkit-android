@@ -316,26 +316,176 @@ jobs:
           ./gradlew clean
 
       # =========================================================
-      # 19. Build RELEASE APK
+      # 19. Prepare signing keystore
       # =========================================================
-      - name: Build Release APK
+      - name: Prepare signing keystore
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "ERROR: KEYSTORE_BASE64 secret is missing."
+            exit 1
+          fi
+
+          echo "$KEYSTORE_BASE64" | base64 --decode > pixelkit-release.jks
+
+          if [ ! -s pixelkit-release.jks ]; then
+            echo "ERROR: Keystore was not created."
+            exit 1
+          fi
+
+          echo "Signing keystore prepared successfully."
+
+      # =========================================================
+      # 20. Create Android signing properties
+      # =========================================================
+      - name: Create Android signing properties
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "ERROR: KEYSTORE_PASSWORD secret is missing."
+            exit 1
+          fi
+
+          if [ -z "$KEY_ALIAS" ]; then
+            echo "ERROR: KEY_ALIAS secret is missing."
+            exit 1
+          fi
+
+          if [ -z "$KEY_PASSWORD" ]; then
+            echo "ERROR: KEY_PASSWORD secret is missing."
+            exit 1
+          fi
+
+          cat > android/keystore.properties <<EOF
+          storeFile=../pixelkit-release.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+
+          echo "Signing properties created."
+
+      # =========================================================
+      # 21. Configure Gradle signing
+      # =========================================================
+      - name: Configure Gradle signing
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          GRADLE_FILE="android/app/build.gradle"
+
+          if [ ! -f "$GRADLE_FILE" ]; then
+            echo "ERROR: android/app/build.gradle was not found."
+            echo
+            echo "Android project files:"
+            find android/app -maxdepth 2 -type f -print | sort
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("android/app/build.gradle")
+          text = path.read_text()
+
+          signing_loader = r'''
+          def keystorePropertiesFile = rootProject.file("keystore.properties")
+          def keystoreProperties = new Properties()
+
+          if (keystorePropertiesFile.exists()) {
+              keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+          }
+          '''
+
+          if "keystorePropertiesFile" not in text:
+              text = signing_loader + "\n" + text
+
+          if "signingConfigs {" not in text:
+              signing_block = r'''
+              signingConfigs {
+                  release {
+                      if (keystorePropertiesFile.exists()) {
+                          storeFile file(keystoreProperties["storeFile"])
+                          storePassword keystoreProperties["storePassword"]
+                          keyAlias keystoreProperties["keyAlias"]
+                          keyPassword keystoreProperties["keyPassword"]
+                      }
+                  }
+              }
+          '''
+
+              text = text.replace(
+                  "android {",
+                  "android {" + signing_block,
+                  1
+              )
+
+          if "signingConfig signingConfigs.release" not in text:
+              text = text.replace(
+                  "buildTypes {",
+                  """buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                  }
+          """,
+                  1
+              )
+
+          path.write_text(text)
+          PY
+
+          echo "Gradle signing configuration added."
+
+      # =========================================================
+      # 22. Verify signing configuration
+      # =========================================================
+      - name: Verify signing configuration
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test -f pixelkit-release.jks
+          test -f android/keystore.properties
+          test -f android/app/build.gradle
+
+          echo "Signing files are present."
+
+      # =========================================================
+      # 23. Build SIGNED RELEASE APK
+      # =========================================================
+      - name: Build Signed Release APK
         working-directory: ${{ env.PROJECT_DIR }}/android
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           chmod +x gradlew
 
           ./gradlew assembleRelease --stacktrace
 
       # =========================================================
-      # 20. Find RELEASE APK
+      # 24. Find RELEASE APK
       # =========================================================
       - name: Find Release APK
         working-directory: ${{ env.PROJECT_DIR }}
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
           echo "Searching for release APK..."
 
@@ -362,25 +512,59 @@ jobs:
           echo "$APK"
 
       # =========================================================
-      # 21. Upload RELEASE APK
+      # 25. Verify APK signature
       # =========================================================
-      - name: Upload Release APK
+      - name: Verify APK signature
+        working-directory: ${{ env.PROJECT_DIR }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK_FILE="$APK"
+
+          if [ ! -f "$APK_FILE" ]; then
+            echo "ERROR: APK file not found."
+            exit 1
+          fi
+
+          echo "APK:"
+          echo "$APK_FILE"
+
+          echo
+          echo "Checking APK with apksigner..."
+
+          APKSIGNER="$(find "$ANDROID_HOME" \
+            -type f \
+            -name apksigner \
+            | head -n 1)"
+
+          if [ -z "$APKSIGNER" ]; then
+            echo "WARNING: apksigner was not found."
+            echo "Skipping signature verification."
+          else
+            "$APKSIGNER" verify --verbose "$APK_FILE"
+          fi
+
+      # =========================================================
+      # 26. Upload SIGNED RELEASE APK
+      # =========================================================
+      - name: Upload Signed Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: PixelKit-release-apk
+          name: PixelKit-signed-release-apk
           path: ${{ env.PROJECT_DIR }}/${{ env.APK }}
           if-no-files-found: error
 
       # =========================================================
-      # 22. Complete
+      # 27. Complete
       # =========================================================
       - name: Build complete
         shell: bash
         run: |
           echo
           echo "=========================================="
-          echo "   PIXELKIT RELEASE APK BUILD SUCCESSFUL"
+          echo " PIXELKIT SIGNED RELEASE APK SUCCESSFUL"
           echo "=========================================="
           echo
           echo "Artifact:"
-          echo "PixelKit-release-apk"
+          echo "PixelKit-signed-release-apk"
